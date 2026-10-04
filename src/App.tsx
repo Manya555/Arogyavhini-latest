@@ -299,7 +299,7 @@ function AppContent() {
       {/* Main Page Body: Render exclusively based on authenticated user role */}
       <div className="flex-1 w-full flex flex-col">
         {!isAuthenticated || !user ? (
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 pt-6">
+          <main className="flex-1 w-full">
             <HomeHero onOpenAuth={() => openAuth('login')} />
           </main>
         ) : role === 'driver' ? (
@@ -309,119 +309,13 @@ function AppContent() {
         ) : role === 'admin' ? (
           <AdminDashboard />
         ) : (
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 pt-6">
+          <main className="flex-1 w-full">
             <HomeHero onOpenAuth={() => openAuth('login')} />
           </main>
         )}
       </div>
 
-      {/* Production-Grade Clean Footer (Visible on public landing page) */}
-      {!isAuthenticated && (
-        <footer className="mt-12 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 py-6 px-4 sm:px-6 text-xs text-slate-500 dark:text-slate-400 transition-colors">
-          <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-red-600 flex items-center justify-center text-white font-bold text-sm shadow-xs">
-                <Activity className="w-4 h-4" />
-              </div>
-              <div>
-                <span className="font-bold text-slate-900 dark:text-white block text-sm">
-                  {t.appTitle}
-                </span>
-                <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
-                  {t.appSubtitle}
-                </span>
-              </div>
-            </div>
 
-            <div className="flex flex-wrap items-center justify-center gap-3 text-slate-600 dark:text-slate-300 font-medium text-xs">
-              <span className="flex items-center gap-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-400 px-3 py-1 rounded-md border border-red-200 dark:border-red-900 font-bold">
-                <PhoneCall className="w-3.5 h-3.5" />
-                <span>{t.footerEmergencyHotline}</span>
-              </span>
-              <span className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-md border border-slate-200 dark:border-slate-700">
-                <ShieldCheck className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                <span>{t.verifiedDispatch}</span>
-              </span>
-            </div>
-
-            <div className="text-center md:text-right">
-              <p className="text-[11px] text-slate-400 dark:text-slate-500">
-                {t.footerDesc}
-              </p>
-            </div>
-          </div>
-        </footer>
-      )}
-
-      {/* Floating Emergency SOS Quick Access Trigger */}
-      <div className="fixed bottom-5 right-4 sm:bottom-6 sm:right-6 z-40 flex items-center gap-2">
-        {/* Direct Mobile Speed Dial Call 108 */}
-        <a
-          href="tel:108"
-          title="Direct Toll-Free Emergency Ambulance Hotline 108"
-          onClick={() => {
-            if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-              try { navigator.vibrate([100]); } catch {}
-            }
-          }}
-          className="flex sm:hidden p-2.5 rounded-xl bg-slate-900/95 hover:bg-slate-800 active:bg-slate-700 text-red-400 border border-red-500/60 shadow-xl shadow-slate-950/60 items-center justify-center transition active:scale-95 cursor-pointer backdrop-blur-xs"
-        >
-          <PhoneCall className="w-4 h-4 text-red-500 animate-pulse" />
-        </a>
-
-        {/* High-Contrast Outdoor Glare Mode Quick Button */}
-        <button
-          type="button"
-          id="floating-high-contrast-toggle"
-          onClick={() => {
-            if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-              try { navigator.vibrate([60]); } catch {}
-            }
-            toggleHighContrast();
-            showToast(
-              !isHighContrast
-                ? '☀️ High-Contrast Glare Mode Activated: Pitch Black & Vibrant Yellow'
-                : 'High-Contrast Glare Mode Disabled',
-              'info'
-            );
-          }}
-          title={isHighContrast ? 'Disable High-Contrast Mode' : 'Enable High-Contrast Glare Mode for Direct Sunlight (Alt+H)'}
-          className={`p-2.5 rounded-xl border shadow-xl flex items-center justify-center transition active:scale-95 cursor-pointer backdrop-blur-xs ${
-            isHighContrast
-              ? 'bg-yellow-400 text-black border-white font-extrabold shadow-[0_0_15px_rgba(255,230,0,0.8)]'
-              : 'bg-slate-900/95 hover:bg-slate-800 text-yellow-400 border-yellow-500/40 shadow-slate-950/60'
-          }`}
-        >
-          <Contrast className={`w-4 h-4 ${isHighContrast ? 'text-black' : 'text-yellow-400'}`} />
-        </button>
-
-        {/* Rapid SOS Trigger Button */}
-        <button
-          type="button"
-          id="global-sos-floating-trigger"
-          onClick={() => {
-            if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-              try { navigator.vibrate([200, 100, 200]); } catch {}
-            }
-            soundEffects.playEmergencyAlert();
-            setGlobalSosModalOpen(true);
-          }}
-          title="Rapid Emergency SOS: Tap to dispatch or shake phone on mobile (or press Cmd+Shift+S)"
-          className="px-3.5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 active:bg-red-700 text-white shadow-xl shadow-red-900/50 border border-red-400/80 flex items-center gap-2 text-xs font-bold transition-all hover:scale-105 active:scale-95 cursor-pointer backdrop-blur-xs group animate-in fade-in slide-in-from-bottom-3"
-        >
-          <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping shrink-0" />
-          <AlertOctagon className="w-4 h-4 text-white animate-pulse shrink-0" />
-          <span className="inline font-black tracking-tight">SOS</span>
-          <span className="hidden sm:inline">Dispatch</span>
-          <span className="hidden sm:inline-block px-1.5 py-0.5 rounded bg-red-950/80 text-[10px] font-mono text-amber-200 border border-red-400/60 font-black tracking-wider">
-            ⌘+Shift+S
-          </span>
-          <span className="flex sm:hidden items-center gap-1 px-1.5 py-0.5 rounded bg-red-950/90 text-[10px] font-bold text-amber-300 border border-red-400/60">
-            <Smartphone className="w-2.5 h-2.5" />
-            <span>Shake / Tap</span>
-          </span>
-        </button>
-      </div>
 
       {/* Authentication Modal */}
       <AuthModal

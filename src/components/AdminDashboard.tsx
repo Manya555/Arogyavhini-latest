@@ -6,7 +6,6 @@ import { api } from '../services/api';
 import { Ambulance, EmergencyRequest, SystemStats, EmergencyStatus, AmbulanceStatus, Hospital, WardCapacityStatus } from '../types';
 import { EmergencyReportModal } from './EmergencyReportModal';
 import { HospitalCapacityPieChart } from './HospitalCapacityPieChart';
-import { TrafficSignalHUD } from './TrafficSignalHUD';
 import { HospitalERTriageMonitor } from './HospitalERTriageMonitor';
 import { AdminFleetLiveMap } from './AdminFleetLiveMap';
 import { 
@@ -38,6 +37,7 @@ import {
   Menu,
   Bell,
   Flame,
+  Radio,
   Settings
 } from 'lucide-react';
 import { HospitalSidebar, HospitalTab } from './hospital/HospitalSidebar';
@@ -445,9 +445,58 @@ export const AdminDashboard: React.FC = () => {
         <HospitalERTriageMonitor showToast={showToast} />
       </div>
 
-      {/* IoT Traffic Signal Priority & ESP32 Preemption HUD */}
-      <div id="admin-traffic-signals-section">
-        <TrafficSignalHUD />
+      {/* Municipal Green Corridor Traffic Coordination Overview */}
+      <div id="admin-traffic-signals-section" className="bg-white dark:bg-[#111C30] rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Emergency Green Corridor Priority</span>
+            </div>
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mt-1">
+              Municipal Traffic Management Integration
+            </h3>
+          </div>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300">
+            <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
+            <span>Automated Municipal Corridor Protocol</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-800/80 space-y-1.5">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Corridor Status</span>
+            <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              Green Corridor Active
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-normal">
+              Emergency transit routes are synchronized with municipal traffic systems for active corridor clearance.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-800/80 space-y-1.5">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Traffic Management System</span>
+            <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Activity className="w-4 h-4 text-blue-500" />
+              Municipal Traffic Center
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-normal">
+              Direct telemetry handshake with regional traffic signal dispatch and intersection controllers.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-800/80 space-y-1.5">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Preemption Radius</span>
+            <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Radio className="w-4 h-4 text-emerald-500" />
+              800m Geofenced Approach
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-normal">
+              Intersection preemption requests are transmitted dynamically as verified ambulances approach.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Real-time Fleet Geolocation Live Map */}

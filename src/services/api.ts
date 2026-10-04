@@ -1,4 +1,4 @@
-import { User, Ambulance, EmergencyRequest, ActivityLog, SystemStats, CreateEmergencyInput, UserRole, EmergencyStatus, AmbulanceStatus, AppNotification, HospitalOption, EmergencyReport, Hospital, WardCapacityStatus, AmbulanceRatingInput } from '../types';
+import { User, Ambulance, EmergencyRequest, ActivityLog, SystemStats, CreateEmergencyInput, UserRole, EmergencyStatus, AmbulanceStatus, AppNotification, HospitalOption, EmergencyReport, Hospital, WardCapacityStatus, AmbulanceRatingInput, RouteOption } from '../types';
 
 const API_BASE = '/api';
 
@@ -422,50 +422,104 @@ export const api = {
     return handleResponse(res);
   },
 
-  // IoT Traffic Signal Priority APIs
-  async getTrafficSignalStatus(): Promise<{
-    state: {
-      system: string;
-      currentMode: 'NORMAL_MODE' | 'ROUTE_A_PRIORITY' | 'ROUTE_B_PRIORITY';
-      routeA_Signal: 'GREEN' | 'YELLOW' | 'RED';
-      routeB_Signal: 'GREEN' | 'YELLOW' | 'RED';
-      esp32IpAddress: string;
-      hardwareStatus: 'CONNECTED' | 'SIMULATED' | 'OFFLINE';
-      lastCommand: string;
-      lastUpdated: string;
-      activeEmergencyId: number | null;
-      activeJunctionId: string;
-      priorityDurationSeconds: number;
-    };
-    junctions: any[];
-    recentRequests: any[];
-  }> {
-    const res = await fetch(`${API_BASE}/traffic-signals/status`);
-    return handleResponse(res);
-  },
-
-  async sendTrafficSignalCommand(
-    command: 'GREEN_ROUTE_A' | 'GREEN_ROUTE_B' | 'NORMAL_MODE',
-    options?: { junctionId?: string; emergencyId?: number; durationSeconds?: number }
-  ): Promise<{
+  // Real-World Navigation APIs
+  async getNavigationRoute(params: {
+    originLat: number;
+    originLng: number;
+    destLat: number;
+    destLng: number;
+    emergencyId?: number;
+    emergencyType?: string;
+  }): Promise<{
     success: boolean;
-    mode: string;
-    hardwareStatus: string;
-    message: string;
-    state: any;
+    route: RouteOption;
+    source: 'osrm' | 'google_routes' | 'fallback';
+    steps: any[];
+    distanceKm: number;
+    estimatedMinutes: number;
+    traffic: 'Low' | 'Moderate' | 'Heavy';
   }> {
-    const res = await fetch(`${API_BASE}/traffic-signals/command`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command, ...options }),
+    const query = new URLSearchParams({
+      originLat: String(params.originLat),
+      originLng: String(params.originLng),
+      destLat: String(params.destLat),
+      destLng: String(params.destLng),
     });
+    if (params.emergencyId) query.set('emergencyId', String(params.emergencyId));
+    if (params.emergencyType) query.set('emergencyType', params.emergencyType);
+
+    const res = await fetch(`${API_BASE}/navigation/route?${query.toString()}`);
     return handleResponse(res);
   },
 
-  async resetTrafficSignals(): Promise<{ success: boolean; mode: string; message: string }> {
-    const res = await fetch(`${API_BASE}/traffic-signals/reset`, {
-      method: 'POST',
+  async getNavigationEta(params: {
+    originLat: number;
+    originLng: number;
+    destLat: number;
+    destLng: number;
+    speed?: number;
+  }): Promise<{
+    success: boolean;
+    distanceKm: number;
+    distanceMeters: number;
+    estimatedMinutes: number;
+    etaTimestamp: string;
+    etaFormatted: string;
+    traffic: 'Low' | 'Moderate' | 'Heavy';
+  }> {
+    const query = new URLSearchParams({
+      originLat: String(params.originLat),
+      originLng: String(params.originLng),
+      destLat: String(params.destLat),
+      destLng: String(params.destLng),
     });
+    if (params.speed) query.set('speed', String(params.speed));
+
+    const res = await fetch(`${API_BASE}/navigation/eta?${query.toString()}`);
+    return handleResponse(res);
+  },
+
+  async getNavigationNearbyHospitals(params: {
+    lat: number;
+    lng: number;
+    radius?: number;
+    emergencyType?: string;
+  }): Promise<{
+    success: boolean;
+    hospitals: any[];
+    count: number;
+    nearestAvailable: any | null;
+  }> {
+    const query = new URLSearchParams({
+      lat: String(params.lat),
+      lng: String(params.lng),
+    });
+    if (params.radius) query.set('radius', String(params.radius));
+    if (params.emergencyType) query.set('emergencyType', params.emergencyType);
+
+    const res = await fetch(`${API_BASE}/navigation/nearby-hospitals?${query.toString()}`);
+    return handleResponse(res);
+  },
+
+  async getNavigationTraffic(params?: {
+    lat?: number;
+    lng?: number;
+    routeId?: string;
+    emergencyId?: number;
+  }): Promise<{
+    success: boolean;
+    corridorStatus: string;
+    trafficCondition: string;
+  }> {
+    const query = new URLSearchParams();
+    if (params?.lat) query.set('lat', String(params.lat));
+    if (params?.lng) query.set('lng', String(params.lng));
+    if (params?.routeId) query.set('routeId', params.routeId);
+    if (params?.emergencyId) query.set('emergencyId', String(params.emergencyId));
+
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await fetch(`${API_BASE}/navigation/traffic${qs}`);
     return handleResponse(res);
   },
 };
+

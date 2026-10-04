@@ -18,6 +18,8 @@ import {
 import { EmergencyRequest } from '../types';
 import { speakInstruction, cancelSpeech, isTextToSpeechSupported, isSpeechRecognitionSupported } from '../utils/voiceNavigation';
 import { useLanguage } from '../context/LanguageContext';
+import { useLocation } from '../context/LocationContext';
+import { executeVoiceCommand } from '../services/voiceAssistantService';
 
 interface PatientVoiceAssistantProps {
   activeEmergency: EmergencyRequest | null;
@@ -50,6 +52,7 @@ export const PatientVoiceAssistant: React.FC<PatientVoiceAssistantProps> = ({
   onCheckProximity,
 }) => {
   const { language } = useLanguage();
+  const { userCoords, resolvedAddress } = useLocation();
   const [isListening, setIsListening] = useState<boolean>(false);
   const [transcript, setTranscript] = useState<string>('');
   const [assistantReply, setAssistantReply] = useState<string>('');
@@ -80,178 +83,184 @@ export const PatientVoiceAssistant: React.FC<PatientVoiceAssistantProps> = ({
     return 'en-IN';
   };
 
-  // Helper to speak response aloud
+  // Helper to speak response aloud with language support
   const speakResponse = useCallback(
-    (text: string) => {
+    (text: string, forceRepeat: boolean = false) => {
       setAssistantReply(text);
       if (isMuted || !isTextToSpeechSupported()) return;
 
       setIsSpeaking(true);
-      speakInstruction(text, false, {
-        onStart: () => {
-          if (isComponentMounted.current) setIsSpeaking(true);
+      speakInstruction(
+        text,
+        false,
+        {
+          onStart: () => {
+            if (isComponentMounted.current) setIsSpeaking(true);
+          },
+          onEnd: () => {
+            if (isComponentMounted.current) setIsSpeaking(false);
+          },
+          onError: () => {
+            if (isComponentMounted.current) setIsSpeaking(false);
+          },
         },
-        onEnd: () => {
-          if (isComponentMounted.current) setIsSpeaking(false);
-        },
-        onError: () => {
-          if (isComponentMounted.current) setIsSpeaking(false);
-        },
-      });
+        { language, forceRepeat }
+      );
     },
-    [isMuted]
+    [isMuted, language]
   );
 
-  // Command processing engine
+  // Intent-based command processing engine
   const processVoiceCommand = useCallback(
-    (spokenText: string) => {
+    async (spokenText: string) => {
       const text = spokenText.toLowerCase().trim();
       setTranscript(spokenText);
 
-      // 1. Where is the ambulance / ETA / Distance command
-      if (
-        text.includes('where') ||
-        text.includes('ambulance') ||
-        text.includes('status') ||
-        text.includes('eta') ||
-        text.includes('far') ||
-        text.includes('distance') ||
-        text.includes('ಎಲ್ಲಿದೆ') ||
-        text.includes('ಆಂಬ್ಯುಲೆನ್ಸ್') ||
-        text.includes('कहाँ') ||
-        text.includes('दूरी')
-      ) {
-        setRecognizedCommandType('AMBULANCE_STATUS');
-        if (!activeEmergency) {
-          speakResponse('There is currently no active emergency dispatch in progress.');
-          return;
-        }
-
-        const dist = distanceKm !== null ? `${distanceKm.toFixed(1)} kilometers` : `${activeEmergency.current_distance_km || 3.2} kilometers`;
-        const eta = etaMinutes !== null ? `${etaMinutes} minutes` : `${activeEmergency.current_eta_minutes || 6} minutes`;
-        const unit = activeEmergency.vehicle_number || 'Emergency Unit';
-        const proximityNote = isWithin2Km ? 'It is currently within your 2 kilometer proximity safety zone.' : '';
-
-        if (language === 'kn') {
-          speakResponse(`ಆಂಬ್ಯುಲೆನ್ಸ್ ${unit} ಪ್ರಸ್ತುತ ${dist} ದೂರದಲ್ಲಿದೆ. ಅಂದಾಜು ಆಗಮನ ${eta}ಗಳಲ್ಲಿ. ${isWithin2Km ? 'ಇದು 2 ಕಿಲೋಮೀಟರ್ ಒಳಗೆ ಬಂದಿದೆ.' : ''}`);
-        } else if (language === 'hi') {
-          speakResponse(`एम्बुलेंस ${unit} वर्तमान में ${dist} दूर है। अनुमानित समय ${eta} है। ${isWithin2Km ? 'यह 2 किलोमीटर के दायरे में है।' : ''}`);
-        } else {
-          speakResponse(`Ambulance ${unit} is currently ${dist} away with an estimated arrival in ${eta}. ${proximityNote}`);
-        }
-        if (onCheckProximity) onCheckProximity();
-        return;
-      }
-
-      // 2. Proximity specific command (Within 2 km)
-      if (
-        text.includes('2 km') ||
-        text.includes('2km') ||
-        text.includes('nearby') ||
-        text.includes('proximity') ||
-        text.includes('close') ||
-        text.includes('ಹತ್ತಿರ') ||
-        text.includes('समीप') ||
-        text.includes('पास')
-      ) {
-        setRecognizedCommandType('PROXIMITY_CHECK');
-        const dist = distanceKm !== null ? distanceKm : (activeEmergency?.current_distance_km || 2.4);
-        if (dist <= 2.0) {
-          speakResponse(`Yes! The ambulance is inside the 2-kilometer zone, approximately ${dist.toFixed(1)} km away.`);
-        } else {
-          speakResponse(`The ambulance is currently ${dist.toFixed(1)} km away, approaching the 2-kilometer threshold.`);
-        }
-        if (onCheckProximity) onCheckProximity();
-        return;
-      }
-
-      // 3. Call Driver command
-      if (
-        text.includes('call') ||
-        text.includes('driver') ||
-        text.includes('phone') ||
-        text.includes('contact') ||
-        text.includes('ಚಾಲಕ') ||
-        text.includes('ಡ್ರೈವರ್') ||
-        text.includes('चालक') ||
-        text.includes('फ़ೋನ್')
-      ) {
-        setRecognizedCommandType('CALL_DRIVER');
-        if (activeEmergency?.driver_phone) {
-          speakResponse(`Connecting you to ambulance driver ${activeEmergency.driver_name || 'crew'} at ${activeEmergency.driver_phone}.`);
-          if (onCallDriver) onCallDriver();
-        } else {
-          speakResponse('Driver contact information is being assigned by the dispatch center.');
-        }
-        return;
-      }
-
-      // 4. First Aid Guidance command
+      // 1. First Aid Guidance command
       if (
         text.includes('first aid') ||
-        text.includes('what should i do') ||
-        text.includes('help') ||
         text.includes('cpr') ||
         text.includes('bleeding') ||
+        text.includes('bandage') ||
         text.includes('ಉಸಿರಾಟ') ||
         text.includes('ಪ್ರಥಮ ಚಿಕಿತ್ಸೆ') ||
-        text.includes('प्राथमिक') ||
-        text.includes('मदद')
+        text.includes('प्राथमिक')
       ) {
         setRecognizedCommandType('FIRST_AID');
-        speakResponse('Keep the patient calm and in a safe position. Loosen tight clothing and do not administer food or liquids. The first aid guide is displayed on your screen.');
+        const reply =
+          language === 'kn'
+            ? 'ರೋಗಿಯನ್ನು ಶಾಂತವಾಗಿರಿಸಿ ಮತ್ತು ಆರಾಮದಾಯಕ ಸ್ಥಿತಿಯಲ್ಲಿ ಮಲಗಿಸಿ. ಉಸಿರಾಟ ಗಮನಿಸಿ. ಪ್ರಥಮ ಚಿಕಿತ್ಸಾ ಮಾರ್ಗದರ್ಶಿ ಪರದೆಯಲ್ಲಿದೆ.'
+            : language === 'hi'
+            ? 'मरीज को शांत और सुरक्षित स्थिति में रखें। कपड़े ढीले करें। प्राथमिक चिकित्सा गाइड आपकी स्क्रीन पर है।'
+            : 'Keep the patient calm and in a safe position. Loosen tight clothing. The first aid guide is displayed on your screen.';
+        speakResponse(reply, true);
         if (onOpenFirstAid) onOpenFirstAid();
         return;
       }
 
-      // 5. Update Symptoms / Voice Notes command
+      // 2. Call Driver command
+      if (
+        text.includes('call driver') ||
+        text.includes('call ambulance') ||
+        text.includes('phone driver') ||
+        text.includes('contact driver') ||
+        text.includes('ಚಾಲಕನಿಗೆ ಕರೆ') ||
+        text.includes('ಡ್ರೈವರ್ ಕರೆ') ||
+        text.includes('चालक को कॉल')
+      ) {
+        setRecognizedCommandType('CALL_DRIVER');
+        if (activeEmergency?.driver_phone) {
+          const reply =
+            language === 'kn'
+              ? `ಆಂಬ್ಯುಲೆನ್ಸ್ ಚಾಲಕ ${activeEmergency.driver_name || ''} ರವರನ್ನು ${activeEmergency.driver_phone} ನಲ್ಲಿ ಸಂಪರ್ಕಿಸಲಾಗುತ್ತಿದೆ.`
+              : language === 'hi'
+              ? `एम्बुलेंस चालक ${activeEmergency.driver_name || ''} से ${activeEmergency.driver_phone} पर संपर्क किया जा रहा है।`
+              : `Connecting you to ambulance driver ${activeEmergency.driver_name || 'crew'} at ${activeEmergency.driver_phone}.`;
+          speakResponse(reply, true);
+          if (onCallDriver) onCallDriver();
+        } else {
+          speakResponse(
+            language === 'kn'
+              ? 'ಚಾಲಕರ ಫೋನ್ ಸಂಖ್ಯೆ ಶೀಘ್ರದಲ್ಲೇ ನಿಯೋಜಿಸಲಾಗುವುದು.'
+              : language === 'hi'
+              ? 'चालक का फोन नंबर जल्द ही असाइन किया जाएगा।'
+              : 'Driver contact is being assigned by the dispatch center.'
+          );
+        }
+        return;
+      }
+
+      // 3. Update Symptoms / Voice Notes command
       if (
         text.includes('symptom') ||
         text.includes('worse') ||
-        text.includes('record') ||
-        text.includes('note') ||
-        text.includes('ಲಕ್ಷಣ') ||
-        text.includes('ಸ್ಥಿತಿ') ||
-        text.includes('लक्षण')
+        text.includes('record voice') ||
+        text.includes('voice note') ||
+        text.includes('update symptom') ||
+        text.includes('ಸ್ಥಿತಿ ಬದಲಾಗಿದೆ') ||
+        text.includes('ಲಕ್ಷಣ ದಾಖಲಿಸಿ') ||
+        text.includes('लक्षण अपडेट')
       ) {
         setRecognizedCommandType('UPDATE_SYMPTOMS');
-        speakResponse('Opening the voice symptom recorder so you can update the emergency medical crew.');
+        speakResponse(
+          language === 'kn'
+            ? 'ತುರ್ತು ವೈದ್ಯಕೀಯ ತಂಡಕ್ಕಾಗಿ ಧ್ವನಿ ಲಕ್ಷಣ ರೆಕಾರ್ಡರ್ ತೆರೆಯಲಾಗುತ್ತಿದೆ.'
+            : language === 'hi'
+            ? 'चिकित्सा दल के लिए वॉयस लक्षण रिकॉर्डर खोला जा रहा है।'
+            : 'Opening the voice symptom recorder so you can update the emergency medical crew.'
+        );
         if (onOpenVoiceSymptoms) onOpenVoiceSymptoms();
         return;
       }
 
-      // 6. Hospital Info command
+      // 4. Cancel Emergency command
       if (
-        text.includes('hospital') ||
-        text.includes('destination') ||
-        text.includes('bed') ||
-        text.includes('ಆಸ್ಪತ್ರೆ') ||
-        text.includes('अस्पताल')
-      ) {
-        setRecognizedCommandType('HOSPITAL_INFO');
-        const hospName = activeEmergency?.selected_hospital || 'Central Multispecialty Trauma Hospital';
-        speakResponse(`Destination hospital is ${hospName} with 24/7 critical emergency bay and green corridor clearance enabled.`);
-        return;
-      }
-
-      // 7. Cancel Emergency command
-      if (
-        text.includes('cancel') ||
-        text.includes('stop') ||
-        text.includes('ರದ್ದು') ||
-        text.includes('रद्द')
+        (text.includes('cancel') || text.includes('stop')) &&
+        (text.includes('emergency') || text.includes('dispatch') || text.includes('ambulance') || text.includes('sos') || text.includes('ರದ್ದು') || text.includes('रद्द'))
       ) {
         setRecognizedCommandType('CANCEL_EMERGENCY');
-        speakResponse('To cancel this emergency dispatch, please tap the confirmation button on your screen.');
+        speakResponse(
+          language === 'kn'
+            ? 'ತುರ್ತು ರದ್ದುಮಾಡಲು ದಯವಿಟ್ಟು ಪರದೆಯ ಮೇಲಿನ ಬಟನ್ ಒತ್ತಿರಿ.'
+            : language === 'hi'
+            ? 'आपातकाल रद्द करने के लिए कृपया स्क्रीन पर दिए गए बटन की पुष्टि करें।'
+            : 'To cancel this emergency dispatch, please tap the confirmation button on your screen.'
+        );
         if (onCancelEmergency) onCancelEmergency();
         return;
       }
 
-      // Default Help / Unrecognized
-      setRecognizedCommandType('HELP');
-      speakResponse(`Command received: "${spokenText}". You can say: Where is my ambulance? Check 2 km proximity, Call driver, or First aid help.`);
+      // 5. Proximity 2km check
+      if (text.includes('2 km') || text.includes('2km') || text.includes('proximity')) {
+        setRecognizedCommandType('PROXIMITY_CHECK');
+        const dist = distanceKm !== null ? distanceKm : (activeEmergency?.current_distance_km || 2.4);
+        if (dist <= 2.0) {
+          speakResponse(`Yes! The ambulance is inside the 2-kilometer zone, approximately ${dist.toFixed(1)} km away.`, true);
+        } else {
+          speakResponse(`The ambulance is currently ${dist.toFixed(1)} km away, approaching the 2-kilometer threshold.`, true);
+        }
+        if (onCheckProximity) onCheckProximity();
+        return;
+      }
+
+      // 6. Real-World Intent Processing for All Other Navigation & Status Queries
+      try {
+        const result = await executeVoiceCommand(spokenText, {
+          role: 'patient',
+          language: (language as 'en' | 'kn' | 'hi') || 'en',
+          userCoords: userCoords,
+          patientCoords: userCoords,
+          activeEmergency: activeEmergency,
+          remainingDistanceKm: distanceKm ?? activeEmergency?.current_distance_km ?? null,
+          remainingDurationMinutes: etaMinutes ?? activeEmergency?.current_eta_minutes ?? null,
+          resolvedAddress: resolvedAddress,
+        });
+
+        setRecognizedCommandType(result.intent);
+        speakResponse(result.spokenResponse, result.intent === 'REPEAT_LAST_INSTRUCTION');
+        if (result.intent === 'GET_AMBULANCE_LOCATION' || result.intent === 'GET_DISTANCE' || result.intent === 'GET_ETA') {
+          if (onCheckProximity && isWithin2Km) onCheckProximity();
+        }
+      } catch (err) {
+        console.warn('Patient voice assistant error:', err);
+        speakResponse(`You can ask: Where is the ambulance? What is my ETA? Where am I? Or Find nearest hospital.`);
+      }
     },
-    [activeEmergency, distanceKm, etaMinutes, isWithin2Km, language, onCallDriver, onCheckProximity, onCancelEmergency, onOpenFirstAid, onOpenVoiceSymptoms, speakResponse]
+    [
+      activeEmergency,
+      distanceKm,
+      etaMinutes,
+      isWithin2Km,
+      language,
+      userCoords,
+      resolvedAddress,
+      onCallDriver,
+      onCheckProximity,
+      onCancelEmergency,
+      onOpenFirstAid,
+      onOpenVoiceSymptoms,
+      speakResponse,
+    ]
   );
 
   // Toggle voice recognition

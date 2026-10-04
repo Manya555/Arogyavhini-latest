@@ -1,12 +1,8 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { Server as HttpServer } from 'http';
-import { SMART_JUNCTIONS, sendTrafficCommand, getTrafficSignalStatus } from '../services/esp32Service.js';
 import { calculateGeoDistanceKm } from '../routeOptimizer.js';
 
 let ioInstance: SocketIOServer | null = null;
-
-// Track active junction priority states to avoid re-triggering repeatedly
-const junctionPriorityMap: Record<string, { active: boolean; emergencyId: number | null; triggeredAt: number }> = {};
 
 export interface AmbulanceLocationPayload {
   ambulanceId: number;
@@ -70,10 +66,6 @@ export function initializeSocketIO(httpServer: HttpServer): SocketIOServer {
         // Broadcast to all admins and drivers
         io.to('role_admin').emit('ambulance_location_update', enrichedPayload);
         io.emit('fleet_ambulance_location', enrichedPayload);
-
-        // Smart Geofence Traffic Signal Priority Check
-        // If ambulance is within 800m (0.8km) of any smart junction along the route
-        await checkTrafficJunctionApproach(data.latitude, data.longitude, data.emergencyId || null, data.ambulanceId);
       } catch (err) {
         console.error('[Socket.IO] Error handling ambulance_location_update:', err);
       }
@@ -118,96 +110,6 @@ export function initializeSocketIO(httpServer: HttpServer): SocketIOServer {
 
 export function getIO(): SocketIOServer | null {
   return ioInstance;
-}
-
-/**
- * Evaluates ambulance GPS against smart traffic intersections.
- * When an active emergency ambulance approaches within 800m of a junction:
- * Automatically activates Green Corridor priority on ESP32 hardware and emits events.
- */
-async function checkTrafficJunctionApproach(
-  ambulanceLat: number,
-  ambulanceLng: number,
-  emergencyId: number | null,
-  ambulanceId: number
-) {
-  if (!emergencyId) return; // Only trigger emergency priority for active SOS missions
-
-  const APPROACH_RADIUS_KM = 0.8; // 800 meters
-  const EXIT_RADIUS_KM = 0.15; // 150 meters (cleared junction)
-
-  for (const junction of SMART_JUNCTIONS) {
-    const dist = calculateGeoDistanceKm([ambulanceLat, ambulanceLng], [junction.latitude, junction.longitude]);
-    const state = junctionPriorityMap[junction.id] || { active: false, emergencyId: null, triggeredAt: 0 };
-
-    // 1. Approaching (< 800m) and not yet active for this junction
-    if (dist <= APPROACH_RADIUS_KM && !state.active) {
-      console.log(`🚨 [TRAFFIC PRIORITY] Ambulance #${ambulanceId} within ${(dist * 1000).toFixed(0)}m of ${junction.name}. Activating GREEN corridor.`);
-      
-      junctionPriorityMap[junction.id] = {
-        active: true,
-        emergencyId,
-        triggeredAt: Date.now(),
-      };
-
-      // Send command to ESP32 hardware
-      const result = await sendTrafficCommand('GREEN_ROUTE_A', {
-        junctionId: junction.id,
-        emergencyId: emergencyId || undefined,
-        ambulanceId,
-        durationSeconds: 30,
-        triggeredBy: 'SOCKET_GEOFENCE_APPROACH',
-      });
-
-      // Broadcast Socket.IO event
-      if (ioInstance) {
-        const payload = {
-          junctionId: junction.id,
-          junctionName: junction.name,
-          emergencyId,
-          ambulanceId,
-          distanceMeters: Math.round(dist * 1000),
-          direction: 'ROUTE_A',
-          priority: true,
-          status: 'GREEN_ACTIVE',
-          hardwareResponse: result,
-          timestamp: new Date().toISOString(),
-        };
-        ioInstance.to(`emergency_${emergencyId}`).emit('traffic_priority_activated', payload);
-        ioInstance.to('role_admin').emit('traffic_priority_activated', payload);
-      }
-    }
-    // 2. Passed the junction (< 150m or moving away after being active for > 15 seconds)
-    else if (state.active && state.emergencyId === emergencyId && (dist > APPROACH_RADIUS_KM + 0.2 || (dist < EXIT_RADIUS_KM && Date.now() - state.triggeredAt > 15000))) {
-      console.log(`✅ [TRAFFIC PRIORITY] Ambulance #${ambulanceId} cleared junction ${junction.name}. Restoring normal cycle.`);
-      
-      junctionPriorityMap[junction.id] = {
-        active: false,
-        emergencyId: null,
-        triggeredAt: 0,
-      };
-
-      await sendTrafficCommand('NORMAL_MODE', {
-        junctionId: junction.id,
-        emergencyId: emergencyId || undefined,
-        ambulanceId,
-        triggeredBy: 'SOCKET_GEOFENCE_CLEARED',
-      });
-
-      if (ioInstance) {
-        const payload = {
-          junctionId: junction.id,
-          junctionName: junction.name,
-          emergencyId,
-          ambulanceId,
-          status: 'NORMAL_RESTORED',
-          timestamp: new Date().toISOString(),
-        };
-        ioInstance.to(`emergency_${emergencyId}`).emit('traffic_priority_completed', payload);
-        ioInstance.to('role_admin').emit('traffic_priority_completed', payload);
-      }
-    }
-  }
 }
 
 // Global broadcasting helpers for backend controllers

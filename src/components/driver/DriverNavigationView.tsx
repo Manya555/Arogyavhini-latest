@@ -192,6 +192,17 @@ export const DriverNavigationView: React.FC<DriverNavigationViewProps> = ({
           destinationName={destinationName}
           isMissionAccepted={['DRIVER_ACCEPTED', 'ON_THE_WAY', 'REACHED'].includes(activeMission.status)}
           driverCoords={driverCoords}
+          patientCoords={
+            activeMission.latitude && activeMission.longitude
+              ? { latitude: activeMission.latitude, longitude: activeMission.longitude }
+              : activeMission.patient_latitude && activeMission.patient_longitude
+              ? { latitude: activeMission.patient_latitude, longitude: activeMission.patient_longitude }
+              : null
+          }
+          activeMission={activeMission}
+          availableHospitals={activeMission.hospital_options || []}
+          onSelectHospital={(hospName) => onSelectHospital(activeMission.id, hospName)}
+          onNavigateToHospital={(hosp) => onNavigateToHospital(activeMission.id, hosp)}
           onRouteRecalculateNeeded={() => onRecalculateRoute(activeMission.id)}
           onStartNavigation={() => {
             if (activeMission.status === 'DRIVER_ACCEPTED') {

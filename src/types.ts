@@ -64,6 +64,7 @@ export interface RouteOption {
   recommendationReason: string;
   waypoints: string[];
   coordinates: [number, number][]; // [lat, lng]
+  steps?: NavigationInstruction[];
 }
 
 export type WardCapacityStatus = 'AVAILABLE' | 'FULL';
@@ -210,7 +211,7 @@ export interface SystemStats {
   availableAmbulances: number;
   busyAmbulances: number;
   completedEmergencies: number;
-  averageResponseTimeMinutes: number;
+  averageResponseTimeMinutes: number | null;
   typeBreakdown: { emergency_type: string; count: number }[];
 }
 
@@ -330,5 +331,10 @@ export interface NavigationInstruction {
   maneuver: 'start' | 'straight' | 'turn-left' | 'turn-right' | 'approaching' | 'reached';
   distanceText: string;
   progressPercent: number;
+  stepDistanceMeters?: number;
+  stepDurationSeconds?: number;
+  roadName?: string;
+  location?: [number, number] | null;
 }
+
 

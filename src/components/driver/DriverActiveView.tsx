@@ -22,7 +22,6 @@ import {
   Share2
 } from 'lucide-react';
 import { EmergencyRequest, EmergencyStatus, HospitalOption } from '../../types';
-import { TrafficSignalHUD } from '../TrafficSignalHUD';
 import { DriverTab } from './DriverSidebar';
 
 interface DriverActiveViewProps {
@@ -397,16 +396,7 @@ export const DriverActiveView: React.FC<DriverActiveViewProps> = ({
         </div>
       </div>
 
-      {/* 4. TRAFFIC SIGNAL PRIORITY INTEGRATION (ESP32) */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs">
-        <TrafficSignalHUD
-          emergencyId={activeMission.id}
-          ambulanceId={activeMission.ambulance_id || 1}
-          activeRouteName="Active Corridor"
-        />
-      </div>
-
-      {/* 5. PRIMARY ACTION BUTTON (LARGE & PROMINENT) */}
+      {/* 4. PRIMARY ACTION BUTTON (LARGE & PROMINENT) */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border-2 border-amber-500 shadow-lg space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">

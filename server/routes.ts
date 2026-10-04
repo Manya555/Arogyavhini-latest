@@ -15,7 +15,6 @@ import {
 } from './routeOptimizer.js';
 import { searchRealNearbyHospitals } from './hospitalSearch.js';
 import { trafficRoutes } from './routes/trafficRoutes.js';
-import { sendTrafficCommand, evaluateApproachingPreemption } from './services/esp32Service.js';
 import {
   broadcastEmergencyCreated,
   broadcastEmergencyAssigned,
@@ -25,11 +24,14 @@ import {
   broadcastAmbulanceLocation,
 } from './sockets/socketHandler.js';
 
+import { navigationRoutes } from './routes/navigationRoutes.js';
+
 export const apiRouter = Router();
 
 // Mount IoT Traffic Signal Priority Routes
 apiRouter.use('/traffic-signals', trafficRoutes);
 apiRouter.use('/traffic', trafficRoutes);
+apiRouter.use('/navigation', navigationRoutes);
 
 // Helper to convert sql.js QueryResults to array of objects
 function formatQueryResult(result: any): any[] {
@@ -1714,16 +1716,6 @@ apiRouter.post('/emergency/:id/driver-location', async (req: Request, res: Respo
       source: 'device_gps',
     });
 
-    // Evaluate approaching smart traffic junctions for automatic green corridor preemption
-    evaluateApproachingPreemption(
-      id,
-      Number(latitude),
-      Number(longitude),
-      emergency.selected_route_name || emergency.selected_route_id || 'Route A Expressway'
-    ).catch((preemptErr) => {
-      console.warn('Auto preemption evaluation notice:', preemptErr);
-    });
-
     return res.json({
       success: true,
       message: 'Driver GPS location updated successfully',
@@ -2256,25 +2248,8 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
       if (status === 'COMPLETED' || status === 'CANCELLED') {
         // Free the ambulance back to AVAILABLE
         db.run("UPDATE ambulances SET status = 'AVAILABLE' WHERE id = ?", [currentRequest.ambulance_id]);
-        
-        // Restore IoT traffic signals to normal cycle
-        sendTrafficCommand('NORMAL_MODE', {
-          emergencyId: id,
-          ambulanceId: currentRequest.ambulance_id,
-          triggeredBy: `EMERGENCY_${status}_RESTORE`,
-        }).catch((tErr) => console.warn('Traffic restore signal notice:', tErr));
       } else if (['DRIVER_ACCEPTED', 'ON_THE_WAY', 'REACHED'].includes(status)) {
         db.run("UPDATE ambulances SET status = 'BUSY' WHERE id = ?", [currentRequest.ambulance_id]);
-
-        if (status === 'ON_THE_WAY') {
-          // Preemptively activate green corridor on Route A
-          sendTrafficCommand('GREEN_ROUTE_A', {
-            emergencyId: id,
-            ambulanceId: currentRequest.ambulance_id,
-            durationSeconds: 40,
-            triggeredBy: 'DRIVER_DISPATCH_ON_THE_WAY',
-          }).catch((tErr) => console.warn('Traffic priority signal notice:', tErr));
-        }
       }
     }
 
@@ -3005,6 +2980,11 @@ apiRouter.get('/stats', async (req: Request, res: Response) => {
     const typeBreakdownQuery = db.exec("SELECT emergency_type, COUNT(*) as count FROM emergency_requests GROUP BY emergency_type");
     const typeBreakdown = formatQueryResult(typeBreakdownQuery[0]);
 
+    // Real Average response time from completed emergencies (in minutes)
+    const avgTimeQuery = db.exec("SELECT AVG((julianday(updated_at) - julianday(created_at)) * 24 * 60) as avg_min FROM emergency_requests WHERE status = 'COMPLETED' AND created_at IS NOT NULL AND updated_at IS NOT NULL");
+    const rawAvg = (avgTimeQuery[0]?.values[0]?.[0] as number | null);
+    const averageResponseTimeMinutes = rawAvg && !isNaN(rawAvg) && rawAvg > 0 ? parseFloat(rawAvg.toFixed(1)) : null;
+
     return res.json({
       totalEmergencies,
       activeEmergencies,
@@ -3012,7 +2992,7 @@ apiRouter.get('/stats', async (req: Request, res: Response) => {
       availableAmbulances,
       busyAmbulances,
       completedEmergencies,
-      averageResponseTimeMinutes: 6.4,
+      averageResponseTimeMinutes,
       typeBreakdown,
     });
   } catch (error: any) {

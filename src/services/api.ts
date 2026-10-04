@@ -1,13 +1,115 @@
 import { User, Ambulance, EmergencyRequest, ActivityLog, SystemStats, CreateEmergencyInput, UserRole, EmergencyStatus, AmbulanceStatus, AppNotification, HospitalOption, EmergencyReport, Hospital, WardCapacityStatus, AmbulanceRatingInput, RouteOption } from '../types';
 
-const API_BASE = '/api';
+const getApiBase = (): string => {
+  const envUrl = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || '').trim();
+
+  // Guard against baked-in localhost URLs leaking into production deployments
+  if (typeof window !== 'undefined') {
+    const isLocalhostHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (envUrl && !isLocalhostHost && (envUrl.includes('localhost') || envUrl.includes('127.0.0.1'))) {
+      console.warn('[API] Production environment detected: overriding localhost API URL to relative /api');
+      return '/api';
+    }
+  }
+
+  if (!envUrl) return '/api';
+  const clean = envUrl.replace(/\/+$/, '');
+  return clean.endsWith('/api') ? clean : `${clean}/api`;
+};
+
+export const API_BASE = getApiBase();
+
+export function getAuthHeaders(customHeaders: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...customHeaders };
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('arogyavahini_token');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const savedUser = localStorage.getItem('arogyavahini_user');
+    if (savedUser) {
+      try {
+        const u = JSON.parse(savedUser);
+        if (u?.role) headers['x-user-role'] = u.role;
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return headers;
+}
+
+export class ApiError extends Error {
+  status: number;
+  statusText: string;
+  url: string;
+  data?: any;
+
+  constructor(message: string, status: number, statusText: string, url: string, data?: any) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.statusText = statusText;
+    this.url = url;
+    this.data = data;
+  }
+}
 
 async function handleResponse<T>(res: Response): Promise<T> {
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || `Request failed with status ${res.status}`);
+  const contentType = res.headers.get('content-type') || '';
+  const rawText = await res.text().catch(() => '');
+  const trimmed = rawText.trim();
+
+  // Detect HTML or plain-text Vercel 404 / 500 error pages
+  const isHtml = trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html') || trimmed.startsWith('<!doctype');
+  const isVercel404 =
+    trimmed.toLowerCase().includes('the page could not be found') ||
+    trimmed.startsWith('404: NOT_FOUND') ||
+    (res.status === 404 && !contentType.includes('application/json'));
+
+  if (isHtml || isVercel404) {
+    const errorMsg = isVercel404
+      ? 'API endpoint not reachable (404). Please ensure backend server routes are deployed and accessible.'
+      : `Received HTML document instead of JSON response (${res.status} ${res.statusText}). Please check API URL routing.`;
+    
+    console.error(`[API Error] Non-JSON format from ${res.url} [HTTP ${res.status}]:`, trimmed.slice(0, 180));
+    throw new ApiError(errorMsg, res.status === 200 ? 404 : res.status, res.statusText, res.url, {
+      rawText: trimmed.slice(0, 200),
+      contentType,
+    });
   }
-  return data;
+
+  // Parse JSON safely
+  let data: any = null;
+  if (trimmed) {
+    try {
+      data = JSON.parse(trimmed);
+    } catch (parseErr: any) {
+      console.error(`[API Parse Error] JSON syntax error from ${res.url} [HTTP ${res.status}]:`, trimmed.slice(0, 180));
+      throw new ApiError(
+        `Unable to parse API response (${res.status}). Server returned unexpected content format.`,
+        res.status,
+        res.statusText,
+        res.url,
+        { rawText: trimmed.slice(0, 200), parseError: parseErr.message }
+      );
+    }
+  } else {
+    data = {};
+  }
+
+  // Check HTTP response ok status
+  if (!res.ok) {
+    const errorMsg =
+      data?.error?.message ||
+      data?.error ||
+      data?.message ||
+      `Request failed with status ${res.status}`;
+    console.warn(`[API] HTTP ${res.status} from ${res.url}:`, errorMsg);
+    throw new ApiError(errorMsg, res.status, res.statusText, res.url, data);
+  }
+
+  return data as T;
 }
 
 export const api = {
@@ -56,30 +158,49 @@ export const api = {
   },
 
   // Auth
-  async login(email: string, password: string): Promise<{ user: User; message: string }> {
+  async login(email: string, password: string): Promise<{ user: User; message: string; token?: string }> {
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
-    return handleResponse(res);
+    const data = await handleResponse<{ user: User; message: string; token?: string }>(res);
+    if (data.token && typeof window !== 'undefined') {
+      localStorage.setItem('arogyavahini_token', data.token);
+    }
+    return data;
   },
 
-  async register(data: { name: string; email: string; password: string; phone?: string; role?: UserRole }): Promise<{ user: User; message: string }> {
+  async register(data: { name: string; email: string; password: string; phone?: string; role?: UserRole }): Promise<{ user: User; message: string; token?: string }> {
     const res = await fetch(`${API_BASE}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    return handleResponse(res);
+    const result = await handleResponse<{ user: User; message: string; token?: string }>(res);
+    if (result.token && typeof window !== 'undefined') {
+      localStorage.setItem('arogyavahini_token', result.token);
+    }
+    return result;
   },
 
-  async demoLogin(role: UserRole): Promise<{ user: User; message: string }> {
+  async demoLogin(role: UserRole): Promise<{ user: User; message: string; token?: string }> {
     const res = await fetch(`${API_BASE}/auth/demo/${role}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
-    return handleResponse(res);
+    const data = await handleResponse<{ user: User; message: string; token?: string }>(res);
+    if (data.token && typeof window !== 'undefined') {
+      localStorage.setItem('arogyavahini_token', data.token);
+    }
+    return data;
+  },
+
+  async logout(): Promise<void> {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('arogyavahini_token');
+      localStorage.removeItem('arogyavahini_user');
+    }
   },
 
   // Patient Medical Profile Management
@@ -519,6 +640,21 @@ export const api = {
 
     const qs = query.toString() ? `?${query.toString()}` : '';
     const res = await fetch(`${API_BASE}/navigation/traffic${qs}`);
+    return handleResponse(res);
+  },
+
+  // ER In-Transit Monitoring & Telemetry
+  async getInTransitEREmergencies(): Promise<{ incoming_transfers: EmergencyRequest[] }> {
+    const res = await fetch(`${API_BASE}/emergency/in-transit-er`);
+    return handleResponse(res);
+  },
+
+  async transmitVitals(emergencyId: number, vitals: Record<string, any>): Promise<{ success: boolean; message?: string }> {
+    const res = await fetch(`${API_BASE}/emergency/${emergencyId}/vitals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(vitals),
+    });
     return handleResponse(res);
   },
 };

@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import { getDb, saveDb, resetDatabase } from './db.js';
+import { isPostgresActive, getPostgresPool } from './config/database.js';
 import {
   optimizeRoute,
   optimizeHospitals,
@@ -214,11 +216,115 @@ function notifyRole(
 }
 
 // ----------------------------------------------------
-// 1. AUTHENTICATION & DEMO ROUTES
+// 1. AUTHENTICATION & DEMO ROUTES (JWT & Multi-DB)
 // ----------------------------------------------------
 
-// POST /api/auth/register
-apiRouter.post('/auth/register', async (req: Request, res: Response) => {
+const JWT_SECRET = process.env.JWT_SECRET || 'arogyavahini-production-jwt-auth-key-2026';
+
+export function createAuthToken(user: { id: number; email: string; role: string; name: string }): string {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const exp = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60; // 7 days expiration
+  const payload = {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    name: user.name,
+    exp,
+    iat: Math.floor(Date.now() / 1000),
+  };
+
+  const b64Header = Buffer.from(JSON.stringify(header)).toString('base64url');
+  const b64Payload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', JWT_SECRET)
+    .update(`${b64Header}.${b64Payload}`)
+    .digest('base64url');
+
+  return `${b64Header}.${b64Payload}.${signature}`;
+}
+
+export function verifyAuthToken(token: string): any | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [b64Header, b64Payload, signature] = parts;
+    const expectedSig = crypto
+      .createHmac('sha256', JWT_SECRET)
+      .update(`${b64Header}.${b64Payload}`)
+      .digest('base64url');
+    if (signature !== expectedSig) return null;
+    const payload = JSON.parse(Buffer.from(b64Payload, 'base64url').toString('utf8'));
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+async function findUserForLogin(email: string, pass: string): Promise<any | null> {
+  const cleanEmail = email.trim().toLowerCase();
+
+  // 1. Try PostgreSQL pool if actively configured in production
+  const pgPool = getPostgresPool();
+  if (pgPool) {
+    try {
+      const res = await pgPool.query(
+        'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE LOWER(email) = LOWER($1) AND password = $2 LIMIT 1',
+        [cleanEmail, pass]
+      );
+      if (res.rows && res.rows.length > 0) {
+        return res.rows[0];
+      }
+    } catch (pgErr) {
+      console.warn('[Auth] PostgreSQL lookup error, falling back to local store:', pgErr);
+    }
+  }
+
+  // 2. Query embedded SQLite engine with parameterized statement
+  const db = await getDb();
+  const stmt = db.prepare(
+    'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE LOWER(email) = :email AND password = :password LIMIT 1'
+  );
+  stmt.bind({ ':email': cleanEmail, ':password': pass });
+  let user: any = null;
+  if (stmt.step()) {
+    user = stmt.getAsObject();
+  }
+  stmt.free();
+  return user;
+}
+
+async function findDemoUser(role: string): Promise<any | null> {
+  const pgPool = getPostgresPool();
+  if (pgPool) {
+    try {
+      const res = await pgPool.query(
+        'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE role = $1 ORDER BY id ASC LIMIT 1',
+        [role]
+      );
+      if (res.rows && res.rows.length > 0) {
+        return res.rows[0];
+      }
+    } catch (pgErr) {
+      console.warn('[Auth] PostgreSQL demo lookup error, falling back:', pgErr);
+    }
+  }
+
+  const db = await getDb();
+  const stmt = db.prepare(
+    'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE role = :role ORDER BY id ASC LIMIT 1'
+  );
+  stmt.bind({ ':role': role });
+  let user: any = null;
+  if (stmt.step()) {
+    user = stmt.getAsObject();
+  }
+  stmt.free();
+  return user;
+}
+
+// POST /api/auth/register & POST /api/users/register
+const handleRegister = async (req: Request, res: Response) => {
   try {
     const { name, email, password, phone, role } = req.body;
 
@@ -227,28 +333,52 @@ apiRouter.post('/auth/register', async (req: Request, res: Response) => {
     }
 
     const assignedRole = role && ['patient', 'driver', 'admin'].includes(role) ? role : 'patient';
-    const db = await getDb();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanName = name.trim();
 
-    // Check if email already exists
+    // 1. Check if email already exists in PostgreSQL
+    const pgPool = getPostgresPool();
+    if (pgPool) {
+      try {
+        const check = await pgPool.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1)', [cleanEmail]);
+        if (check.rows && check.rows.length > 0) {
+          return res.status(400).json({ error: 'User with this email already exists' });
+        }
+        const insertRes = await pgPool.query(
+          'INSERT INTO users (name, email, password, phone, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, phone, role, created_at',
+          [cleanName, cleanEmail, password, phone || '', assignedRole]
+        );
+        const user = insertRes.rows[0];
+        const token = createAuthToken(user);
+        return res.status(201).json({
+          message: 'Registration successful',
+          user,
+          token,
+        });
+      } catch (pgErr) {
+        console.warn('[Auth] PostgreSQL register fallback to local store:', pgErr);
+      }
+    }
+
+    // 2. Fallback to SQLite
+    const db = await getDb();
     const checkStmt = db.prepare('SELECT id FROM users WHERE email = :email');
-    checkStmt.bind({ ':email': email.trim().toLowerCase() });
+    checkStmt.bind({ ':email': cleanEmail });
     if (checkStmt.step()) {
       checkStmt.free();
       return res.status(400).json({ error: 'User with this email already exists' });
     }
     checkStmt.free();
 
-    // Insert user
     db.run(
       'INSERT INTO users (name, email, password, phone, role) VALUES (?, ?, ?, ?, ?)',
-      [name.trim(), email.trim().toLowerCase(), password, phone || '', assignedRole]
+      [cleanName, cleanEmail, password, phone || '', assignedRole]
     );
 
-    const userResult = db.exec('SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE email = "' + email.trim().toLowerCase() + '"');
+    const userResult = db.exec('SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE email = "' + cleanEmail + '"');
     const users = formatQueryResult(userResult[0]);
     const user = users[0];
 
-    // Notification for the newly registered user
     createNotification(db, {
       userId: user.id,
       role: assignedRole,
@@ -257,28 +387,33 @@ apiRouter.post('/auth/register', async (req: Request, res: Response) => {
       notificationType: 'USER_WELCOME',
     });
 
-    // Notification for admins
     notifyRole(db, 'admin', {
       title: 'New User Registration',
-      message: `New user registered: ${name.trim()} (${email.trim()}) as ${assignedRole.toUpperCase()}.`,
+      message: `New user registered: ${cleanName} (${cleanEmail}) as ${assignedRole.toUpperCase()}.`,
       notificationType: 'ADMIN_USER_REGISTERED',
       excludeUserId: user.id,
     });
 
     saveDb(db);
 
+    const token = createAuthToken(user);
+
     return res.status(201).json({
       message: 'Registration successful',
       user,
+      token,
     });
   } catch (error: any) {
     console.error('Registration error:', error);
     return res.status(500).json({ error: error.message || 'Registration failed' });
   }
-});
+};
 
-// POST /api/auth/login
-apiRouter.post('/auth/login', async (req: Request, res: Response) => {
+apiRouter.post('/auth/register', handleRegister);
+apiRouter.post('/users/register', handleRegister);
+
+// POST /api/auth/login & POST /api/users/login
+const handleLogin = async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
@@ -286,50 +421,88 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const db = await getDb();
-    const query = db.exec(`SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE email = '${email.trim().toLowerCase()}' AND password = '${password}'`);
-    const users = formatQueryResult(query[0]);
+    const user = await findUserForLogin(email, password);
 
-    if (users.length === 0) {
+    if (!user) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    const user = users[0];
+    const token = createAuthToken({
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+    });
+
     return res.json({
       message: 'Login successful',
       user,
+      token,
     });
   } catch (error: any) {
     console.error('Login error:', error);
     return res.status(500).json({ error: error.message || 'Login failed' });
   }
-});
+};
 
-// POST /api/auth/demo/:role
-apiRouter.post('/auth/demo/:role', async (req: Request, res: Response) => {
+apiRouter.post('/auth/login', handleLogin);
+apiRouter.post('/users/login', handleLogin);
+
+// POST /api/auth/demo/:role & POST /api/users/demo/:role
+const handleDemoLogin = async (req: Request, res: Response) => {
   try {
     const role = req.params.role;
     if (!['patient', 'driver', 'admin'].includes(role)) {
       return res.status(400).json({ error: 'Invalid demo role. Use patient, driver, or admin.' });
     }
 
-    const db = await getDb();
-    const query = db.exec(`SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE role = '${role}' LIMIT 1`);
-    const users = formatQueryResult(query[0]);
+    const user = await findDemoUser(role);
 
-    if (users.length === 0) {
+    if (!user) {
       return res.status(404).json({ error: `No demo account found for role: ${role}` });
     }
 
+    const token = createAuthToken({
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+    });
+
     return res.json({
       message: `Demo logged in as ${role}`,
-      user: users[0],
+      user,
+      token,
     });
   } catch (error: any) {
     console.error('Demo login error:', error);
     return res.status(500).json({ error: error.message || 'Demo login failed' });
   }
-});
+};
+
+apiRouter.post('/auth/demo/:role', handleDemoLogin);
+apiRouter.post('/users/demo/:role', handleDemoLogin);
+
+// GET /api/auth/me & GET /api/users/me (verify current token)
+const handleGetMe = async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Missing authorization header' });
+    }
+    const token = authHeader.split(' ')[1];
+    const payload = verifyAuthToken(token);
+    if (!payload) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    return res.json({ user: payload });
+  } catch (err: any) {
+    return res.status(401).json({ error: 'Token verification failed' });
+  }
+};
+
+apiRouter.get('/auth/me', handleGetMe);
+apiRouter.get('/users/me', handleGetMe);
 
 // ----------------------------------------------------
 // PATIENT PROFILE & EMERGENCY MEDICAL ID MANAGEMENT
@@ -2034,10 +2207,48 @@ apiRouter.get('/emergency', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/emergency/in-transit-er
+// Returns all incoming ambulance transfers with live vitals for receiving hospital ER dashboards
+apiRouter.get('/emergency/in-transit-er', async (req: Request, res: Response) => {
+  try {
+    const db = await getDb();
+    const query = db.exec(`
+      SELECT 
+        e.*,
+        a.vehicle_number,
+        COALESCE(u.name, a.driver_name) as driver_name,
+        COALESCE(u.phone, a.phone) as driver_phone,
+        a.type as ambulance_type
+      FROM emergency_requests e
+      LEFT JOIN ambulances a ON e.ambulance_id = a.id
+      LEFT JOIN users u ON e.driver_id = u.id
+      WHERE e.status IN ('ON_THE_WAY', 'REACHED', 'TRANSFERRING_TO_HOSPITAL')
+      ORDER BY 
+        CASE 
+          WHEN e.triage_acuity = 'CODE_RED' THEN 1
+          WHEN e.triage_acuity = 'CODE_YELLOW' THEN 2
+          ELSE 3
+        END,
+        e.created_at DESC
+    `);
+    const results = formatQueryResult(query[0]).map(parseEmergencyRecord);
+    return res.json({
+      count: results.length,
+      incoming_transfers: results,
+    });
+  } catch (error: any) {
+    console.error('Fetch in-transit ER error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to fetch in-transit emergencies' });
+  }
+});
+
 // GET /api/emergency/:id
 apiRouter.get('/emergency/:id', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
+    if (!id || isNaN(id)) {
+      return res.status(400).json({ error: 'Valid numeric emergency ID is required' });
+    }
     const db = await getDb();
 
     const query = db.exec(`
@@ -2707,41 +2918,6 @@ apiRouter.post('/emergency/:id/vitals', async (req: Request, res: Response) => {
 // Alias for e-PCR
 apiRouter.post('/emergency/:id/epcr', async (req: Request, res: Response) => {
   return (apiRouter as any).handle(req, res);
-});
-
-// GET /api/emergency/in-transit-er
-// Returns all incoming ambulance transfers with live vitals for receiving hospital ER dashboards
-apiRouter.get('/emergency/in-transit-er', async (req: Request, res: Response) => {
-  try {
-    const db = await getDb();
-    const query = db.exec(`
-      SELECT 
-        e.*,
-        a.vehicle_number,
-        COALESCE(u.name, a.driver_name) as driver_name,
-        COALESCE(u.phone, a.phone) as driver_phone,
-        a.type as ambulance_type
-      FROM emergency_requests e
-      LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.status IN ('ON_THE_WAY', 'REACHED', 'TRANSFERRING_TO_HOSPITAL')
-      ORDER BY 
-        CASE 
-          WHEN e.triage_acuity = 'CODE_RED' THEN 1
-          WHEN e.triage_acuity = 'CODE_YELLOW' THEN 2
-          ELSE 3
-        END,
-        e.created_at DESC
-    `);
-    const results = formatQueryResult(query[0]).map(parseEmergencyRecord);
-    return res.json({
-      count: results.length,
-      incoming_transfers: results,
-    });
-  } catch (error: any) {
-    console.error('Fetch in-transit ER error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch in-transit emergencies' });
-  }
 });
 
 // GET /api/patient/:id/emergency-card

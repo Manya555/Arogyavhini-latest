@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { EmergencyRequest } from '../types';
 import { socketService } from '../services/socketService';
+import { api } from '../services/api';
 
 interface HospitalERTriageMonitorProps {
   showToast: (message: string, type: 'success' | 'error' | 'info') => void;
@@ -27,12 +28,10 @@ export const HospitalERTriageMonitor: React.FC<HospitalERTriageMonitorProps> = (
 
   const fetchIncomingTransfers = useCallback(async () => {
     try {
-      const res = await fetch('/api/emergency/in-transit-er');
-      if (!res.ok) throw new Error('Failed to load ER transfers');
-      const data = await res.json();
+      const data = await api.getInTransitEREmergencies();
       setIncomingTransfers(data.incoming_transfers || []);
-    } catch (err) {
-      console.warn('Could not fetch in-transit ER emergencies:', err);
+    } catch (err: any) {
+      console.warn('Could not fetch in-transit ER emergencies:', err.message || err);
     } finally {
       setLoading(false);
     }

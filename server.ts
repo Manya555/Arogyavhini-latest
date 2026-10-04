@@ -1,54 +1,25 @@
 import express from 'express';
-import cors from 'cors';
 import http from 'http';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { apiRouter } from './server/routes.js';
+import { app } from './server/app.js';
 import { getDb } from './server/db.js';
 import { initializeSocketIO } from './server/sockets/socketHandler.js';
 
-
 async function startServer() {
-  const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   const httpServer = http.createServer(app);
 
   // Initialize real-time Socket.IO communication
-  const io = initializeSocketIO(httpServer);
+  initializeSocketIO(httpServer);
 
-  // Initialize SQLite database on startup
+  // Initialize database on startup
   try {
     await getDb();
-    console.log('✅ Arogyavahini SQLite Database initialized and seeded successfully.');
+    console.log('✅ Arogyavahini Database initialized and seeded successfully.');
   } catch (err) {
     console.error('❌ Failed to initialize database:', err);
   }
-
-  // Middleware
-  app.use(cors());
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
-
-  // Request logger for debugging
-  app.use((req, res, next) => {
-    if (req.path.startsWith('/api')) {
-      console.log(`[API] ${req.method} ${req.path}`);
-    }
-    next();
-  });
-
-  // REST API Routes FIRST
-  app.use('/api', apiRouter);
-
-  // Health check endpoint
-  app.get('/api/health', (req, res) => {
-    res.json({
-      status: 'healthy',
-      system: 'Arogyavahini – Smart Integrated Emergency Medical Response System',
-      version: '2.0.0',
-      timestamp: new Date().toISOString(),
-    });
-  });
 
   // Vite middleware for development vs Static files for production
   if (process.env.NODE_ENV !== 'production') {

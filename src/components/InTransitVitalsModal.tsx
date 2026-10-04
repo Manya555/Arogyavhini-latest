@@ -13,6 +13,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { InTransitVitalsInput, TriageAcuityLevel } from '../types';
+import { api } from '../services/api';
 
 interface InTransitVitalsModalProps {
   isOpen: boolean;
@@ -124,16 +125,7 @@ export const InTransitVitalsModal: React.FC<InTransitVitalsModalProps> = ({
     };
 
     try {
-      const res = await fetch(`/api/emergency/${emergencyId}/vitals`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(vitalsPayload),
-      });
-
-      if (!res.ok) {
-        throw new Error('Failed to transmit vitals to emergency department');
-      }
-
+      await api.transmitVitals(emergencyId, vitalsPayload);
       showToast(`e-PCR transmitted! ${destinationHospital} ER notified (${acuity})`, 'success');
       onVitalsSubmitted(vitalsPayload);
       onClose();

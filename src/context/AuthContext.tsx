@@ -51,6 +51,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await api.login(email, pass);
       setUser(res.user);
       localStorage.setItem('arogyavahini_user', JSON.stringify(res.user));
+      if (res.token) {
+        localStorage.setItem('arogyavahini_token', res.token);
+      }
       showToast(`Welcome back, ${res.user.name}!`, 'success');
     } catch (error: any) {
       showToast(error.message || 'Login failed', 'error');
@@ -66,6 +69,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await api.register(data);
       setUser(res.user);
       localStorage.setItem('arogyavahini_user', JSON.stringify(res.user));
+      if (res.token) {
+        localStorage.setItem('arogyavahini_token', res.token);
+      }
       showToast('Registration successful! Logged in.', 'success');
     } catch (error: any) {
       showToast(error.message || 'Registration failed', 'error');
@@ -81,6 +87,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await api.demoLogin(role);
       setUser(res.user);
       localStorage.setItem('arogyavahini_user', JSON.stringify(res.user));
+      if (res.token) {
+        localStorage.setItem('arogyavahini_token', res.token);
+      }
       showToast(`Logged in as ${res.user.name} (${role.toUpperCase()})`, 'success');
     } catch (error: any) {
       showToast(error.message || 'Login failed', 'error');
@@ -92,6 +101,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     setUser(null);
     localStorage.removeItem('arogyavahini_user');
+    localStorage.removeItem('arogyavahini_token');
     showToast('Logged out successfully', 'info');
   };
 

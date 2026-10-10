@@ -3,7 +3,7 @@ import http from 'http';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { app } from './server/app.js';
-import { getDb } from './server/db.js';
+import { ensureDatabaseReady } from './server/config/database.js';
 import { initializeSocketIO } from './server/sockets/socketHandler.js';
 
 async function startServer() {
@@ -15,8 +15,8 @@ async function startServer() {
 
   // Initialize database on startup
   try {
-    await getDb();
-    console.log('✅ Arogyavahini Database initialized and seeded successfully.');
+    await ensureDatabaseReady();
+    console.log('✅ Arogyavahini Database initialized and verified successfully.');
   } catch (err) {
     console.error('❌ Failed to initialize database:', err);
   }

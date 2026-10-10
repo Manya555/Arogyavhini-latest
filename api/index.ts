@@ -8,13 +8,13 @@
  */
 
 import { app } from '../server/app.js';
-import { getDb } from '../server/db.js';
+import { ensureDatabaseReady } from '../server/config/database.js';
 
-let dbReadyPromise: Promise<any> | null = null;
+let dbReadyPromise: Promise<void> | null = null;
 
 function ensureDatabase() {
   if (!dbReadyPromise) {
-    dbReadyPromise = getDb().catch((err) => {
+    dbReadyPromise = ensureDatabaseReady().catch((err) => {
       console.warn('[Vercel Serverless] DB init notice:', err);
       dbReadyPromise = null;
       throw err;

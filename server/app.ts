@@ -10,7 +10,6 @@
 import express, { Express } from 'express';
 import cors from 'cors';
 import { apiRouter } from './routes.js';
-import { getDb } from './db.js';
 
 export function createApp(): Express {
   const app = express();

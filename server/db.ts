@@ -11,7 +11,39 @@ export async function getDb(): Promise<Database> {
     return dbInstance;
   }
 
-  const SQL = await initSqlJs();
+  // Robust WASM asset resolution for Vercel / serverless and local dev environments
+  const wasmCandidatePaths = [
+    path.join(process.cwd(), 'node_modules/sql.js/dist/sql-wasm.wasm'),
+    path.join(process.cwd(), 'dist/sql-wasm.wasm'),
+    '/var/task/node_modules/sql.js/dist/sql-wasm.wasm',
+  ];
+
+  let wasmPath: string | null = null;
+  for (const candidate of wasmCandidatePaths) {
+    if (fs.existsSync(candidate)) {
+      wasmPath = candidate;
+      break;
+    }
+  }
+
+  let SQL: any;
+  try {
+    if (wasmPath) {
+      const fileBuf = fs.readFileSync(wasmPath);
+      const wasmBinary = fileBuf.buffer.slice(fileBuf.byteOffset, fileBuf.byteOffset + fileBuf.byteLength);
+      SQL = await initSqlJs({
+        locateFile: () => wasmPath!,
+        wasmBinary: wasmBinary as ArrayBuffer,
+      });
+    } else {
+      SQL = await initSqlJs();
+    }
+  } catch (wasmErr) {
+    console.warn('⚠️ [SQLite Fallback] sql-wasm loading failed, using pure JS asm.js engine:', (wasmErr as any)?.message || wasmErr);
+    // Dynamic import pure JS asm.js build of sql.js that requires no wasm file
+    const { default: initSqlJsAsm } = await import('sql.js/dist/sql-asm.js');
+    SQL = await (initSqlJsAsm as any)();
+  }
 
   if (fs.existsSync(DB_FILE_PATH)) {
     try {
@@ -36,7 +68,7 @@ export function saveDb(db: Database) {
     const buffer = Buffer.from(data);
     fs.writeFileSync(DB_FILE_PATH, buffer);
   } catch (err) {
-    console.error('Error saving SQLite database to disk:', err);
+    console.warn('Notice: SQLite disk persistence skipped (serverless environment):', (err as any)?.message || err);
   }
 }
 

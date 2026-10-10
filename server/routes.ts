@@ -275,12 +275,17 @@ async function findUserForLogin(email: string, pass: string): Promise<any | null
       if (res.rows && res.rows.length > 0) {
         return res.rows[0];
       }
+      // PostgreSQL is active and user was not found with matching credentials
+      return null;
     } catch (pgErr) {
-      console.warn('[Auth] PostgreSQL lookup error, falling back to local store:', pgErr);
+      console.warn('[Auth] PostgreSQL lookup error:', pgErr);
+      if (process.env.NODE_ENV === 'production') {
+        return null;
+      }
     }
   }
 
-  // 2. Query embedded SQLite engine with parameterized statement
+  // 2. Query embedded SQLite engine with parameterized statement (local development only)
   const db = await getDb();
   const stmt = db.prepare(
     'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE LOWER(email) = :email AND password = :password LIMIT 1'
@@ -305,11 +310,17 @@ async function findDemoUser(role: string): Promise<any | null> {
       if (res.rows && res.rows.length > 0) {
         return res.rows[0];
       }
+      // Demo account not found in PostgreSQL
+      return null;
     } catch (pgErr) {
-      console.warn('[Auth] PostgreSQL demo lookup error, falling back:', pgErr);
+      console.warn('[Auth] PostgreSQL demo lookup error:', pgErr);
+      if (process.env.NODE_ENV === 'production') {
+        return null;
+      }
     }
   }
 
+  // Local development fallback
   const db = await getDb();
   const stmt = db.prepare(
     'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE role = :role ORDER BY id ASC LIMIT 1'
@@ -356,11 +367,14 @@ const handleRegister = async (req: Request, res: Response) => {
           token,
         });
       } catch (pgErr) {
-        console.warn('[Auth] PostgreSQL register fallback to local store:', pgErr);
+        console.warn('[Auth] PostgreSQL register error:', pgErr);
+        if (process.env.NODE_ENV === 'production') {
+          return res.status(500).json({ error: 'Failed to create user account in database' });
+        }
       }
     }
 
-    // 2. Fallback to SQLite
+    // 2. Fallback to SQLite (local development only)
     const db = await getDb();
     const checkStmt = db.prepare('SELECT id FROM users WHERE email = :email');
     checkStmt.bind({ ':email': cleanEmail });
@@ -514,6 +528,22 @@ apiRouter.get('/patient/profile/:userId', async (req: Request, res: Response) =>
     const userId = Number(req.params.userId);
     if (!userId || isNaN(userId)) {
       return res.status(400).json({ error: 'Valid user ID is required' });
+    }
+
+    const pgPool = getPostgresPool();
+    if (pgPool) {
+      try {
+        const resPg = await pgPool.query(
+          'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id = $1',
+          [userId]
+        );
+        if (resPg.rows && resPg.rows.length > 0) {
+          return res.json({ user: resPg.rows[0] });
+        }
+        return res.status(404).json({ error: 'User not found' });
+      } catch (pgErr) {
+        console.warn('[Profile] PostgreSQL query fallback:', pgErr);
+      }
     }
 
     const db = await getDb();
@@ -985,6 +1015,16 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
 // Fetches all registered local emergency hospitals with their ward capacity status
 apiRouter.get('/hospitals', async (req: Request, res: Response) => {
   try {
+    const pgPool = getPostgresPool();
+    if (pgPool) {
+      try {
+        const resPg = await pgPool.query('SELECT * FROM hospitals ORDER BY ward_capacity ASC, id ASC');
+        return res.json({ hospitals: resPg.rows });
+      } catch (pgErr) {
+        console.warn('[Hospitals] PostgreSQL query fallback:', pgErr);
+      }
+    }
+
     const db = await getDb();
     const result = db.exec('SELECT * FROM hospitals ORDER BY ward_capacity ASC, id ASC');
     const hospitals = formatQueryResult(result[0]);
@@ -2967,6 +3007,19 @@ apiRouter.get('/patient/:id/emergency-card', async (req: Request, res: Response)
 // GET /api/ambulances
 apiRouter.get('/ambulances', async (req: Request, res: Response) => {
   try {
+    const pgPool = getPostgresPool();
+    if (pgPool) {
+      try {
+        const resPg = await pgPool.query('SELECT * FROM ambulances ORDER BY id ASC');
+        return res.json({
+          count: resPg.rows.length,
+          ambulances: resPg.rows,
+        });
+      } catch (pgErr) {
+        console.warn('[Ambulances] PostgreSQL query fallback:', pgErr);
+      }
+    }
+
     const db = await getDb();
     const query = db.exec("SELECT * FROM ambulances ORDER BY id ASC");
     const ambulances = formatQueryResult(query[0]);
@@ -2984,6 +3037,19 @@ apiRouter.get('/ambulances', async (req: Request, res: Response) => {
 // GET /api/ambulances/available
 apiRouter.get('/ambulances/available', async (req: Request, res: Response) => {
   try {
+    const pgPool = getPostgresPool();
+    if (pgPool) {
+      try {
+        const resPg = await pgPool.query("SELECT * FROM ambulances WHERE status = 'AVAILABLE' ORDER BY id ASC");
+        return res.json({
+          count: resPg.rows.length,
+          ambulances: resPg.rows,
+        });
+      } catch (pgErr) {
+        console.warn('[Ambulances] PostgreSQL available query fallback:', pgErr);
+      }
+    }
+
     const db = await getDb();
     const query = db.exec("SELECT * FROM ambulances WHERE status = 'AVAILABLE' ORDER BY id ASC");
     const available = formatQueryResult(query[0]);

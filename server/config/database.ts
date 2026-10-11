@@ -10,6 +10,7 @@
  */
 
 import pg from 'pg';
+import { hashPassword } from '../security.js';
 
 const { Pool } = pg;
 
@@ -94,21 +95,21 @@ export function getPostgresPool(): pg.Pool | null {
 export async function initPostgresSchema(poolInstance: pg.Pool): Promise<void> {
   const client = await poolInstance.connect();
   try {
-    // 1. Ensure core users table exists
+    // 1. Ensure core users table exists matching existing Neon schema
     await client.query(`
+      CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+      CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
       CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        client_id UUID,
         name VARCHAR(150) NOT NULL,
         email VARCHAR(255) UNIQUE NOT NULL,
-        password VARCHAR(255) NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
         phone VARCHAR(30),
         role VARCHAR(30) NOT NULL CHECK (role IN ('patient', 'driver', 'admin')),
-        blood_type VARCHAR(10) DEFAULT 'B+',
-        allergies TEXT DEFAULT 'None reported',
-        medical_notes TEXT,
-        emergency_contact_name VARCHAR(150),
-        emergency_contact_phone VARCHAR(30),
-        emergency_contact_relation VARCHAR(50) DEFAULT 'Next of Kin',
+        auth_provider VARCHAR(50) DEFAULT 'local',
+        delete_flag BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
@@ -121,7 +122,7 @@ export async function initPostgresSchema(poolInstance: pg.Pool): Promise<void> {
       CREATE TABLE IF NOT EXISTS ambulances (
         id SERIAL PRIMARY KEY,
         vehicle_number VARCHAR(50) UNIQUE NOT NULL,
-        driver_user_id INTEGER,
+        driver_user_id VARCHAR(50),
         driver_name VARCHAR(150) NOT NULL,
         phone VARCHAR(30) NOT NULL,
         type VARCHAR(50) DEFAULT 'Basic Life Support (BLS)',
@@ -137,14 +138,14 @@ export async function initPostgresSchema(poolInstance: pg.Pool): Promise<void> {
     await client.query(`
       CREATE TABLE IF NOT EXISTS emergency_requests (
         id SERIAL PRIMARY KEY,
-        patient_id INTEGER,
+        patient_id VARCHAR(50),
         patient_name VARCHAR(150) NOT NULL,
         emergency_type VARCHAR(100) NOT NULL,
         location VARCHAR(255) NOT NULL,
         latitude DECIMAL(10, 7) NOT NULL,
         longitude DECIMAL(10, 7) NOT NULL,
         phone VARCHAR(30) NOT NULL,
-        driver_id INTEGER,
+        driver_id VARCHAR(50),
         ambulance_id INTEGER,
         status VARCHAR(40) DEFAULT 'WAITING_FOR_DRIVER',
         route_origin TEXT,
@@ -190,6 +191,14 @@ export async function initPostgresSchema(poolInstance: pg.Pool): Promise<void> {
       );
     `);
 
+    // Non-destructive column migrations for UUID foreign references
+    try {
+      await client.query('ALTER TABLE emergency_requests ALTER COLUMN driver_id TYPE VARCHAR(50) USING driver_id::text;');
+    } catch { /* non-blocking */ }
+    try {
+      await client.query('ALTER TABLE emergency_requests ALTER COLUMN patient_id TYPE VARCHAR(50) USING patient_id::text;');
+    } catch { /* non-blocking */ }
+
     // 4. Ensure hospitals table exists
     await client.query(`
       CREATE TABLE IF NOT EXISTS hospitals (
@@ -212,7 +221,7 @@ export async function initPostgresSchema(poolInstance: pg.Pool): Promise<void> {
     await client.query(`
       CREATE TABLE IF NOT EXISTS notifications (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER,
+        user_id VARCHAR(50),
         role VARCHAR(30),
         title VARCHAR(200) NOT NULL,
         message TEXT NOT NULL,
@@ -221,6 +230,13 @@ export async function initPostgresSchema(poolInstance: pg.Pool): Promise<void> {
         is_read INTEGER DEFAULT 0,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+    `);
+
+    try {
+      await client.query('ALTER TABLE notifications ALTER COLUMN user_id TYPE VARCHAR(50) USING user_id::text;');
+    } catch { /* non-blocking */ }
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS activity_logs (
         id SERIAL PRIMARY KEY,
         emergency_id INTEGER,
@@ -245,17 +261,19 @@ export async function initPostgresSchema(poolInstance: pg.Pool): Promise<void> {
     `);
 
     // 6. Seed demo users into PostgreSQL if empty
-    const userCountRes = await client.query('SELECT COUNT(*) as count FROM users');
+    const userCountRes = await client.query('SELECT COUNT(*) as count FROM users WHERE delete_flag IS FALSE OR delete_flag IS NULL');
     if (parseInt(userCountRes.rows[0].count, 10) === 0) {
       console.log('🌱 [Database] Seeding initial demo accounts in Neon PostgreSQL...');
+      const demoPatientPass = hashPassword('password123');
+      const demoDriverPass = hashPassword('password123');
+      const demoAdminPass = hashPassword('password123');
       await client.query(`
-        INSERT INTO users (id, name, email, password, phone, role, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes) VALUES
-        (1, 'Priya Rao', 'patient@arogyavahini.in', 'password123', '+91 98765 43210', 'patient', 'B+', 'Penicillin, NSAIDs (Aspirin)', 'Rajesh Rao', '+91 98451 98765', 'Spouse', 'Mild seasonal asthma; carries inhaler'),
-        (2, 'Mohammed Irfan', 'driver@arogyavahini.in', 'password123', '+91 97410 54321', 'driver', 'O+', 'None', 'Fatima Irfan', '+91 97410 99999', 'Spouse', 'Trained first-responder paramedic'),
-        (3, 'Dr. Arvind Deshmukh', 'admin@arogyavahini.in', 'password123', '+91 98111 22334', 'admin', 'A+', 'None', 'Control Center', '+91 80 2200 1122', 'HQ', 'Chief Medical Officer')
-        ON CONFLICT (id) DO NOTHING;
-      `);
-      await client.query("SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE(MAX(id), 1)) FROM users;");
+        INSERT INTO users (id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag) VALUES
+        ('11111111-1111-4111-a111-111111111111', '00000000-0000-0000-0000-000000000001', 'Priya Rao', 'patient@arogyavahini.in', $1, '+91 98765 43210', 'patient', 'local', false),
+        ('22222222-2222-4222-a222-222222222222', '00000000-0000-0000-0000-000000000001', 'Mohammed Irfan', 'driver@arogyavahini.in', $2, '+91 97410 54321', 'driver', 'local', false),
+        ('33333333-3333-4333-a333-333333333333', '00000000-0000-0000-0000-000000000001', 'Dr. Arvind Deshmukh', 'admin@arogyavahini.in', $3, '+91 98111 22334', 'admin', 'local', false)
+        ON CONFLICT (email) DO NOTHING;
+      `, [demoPatientPass, demoDriverPass, demoAdminPass]);
     }
 
     // 7. Seed demo ambulances into PostgreSQL if empty
@@ -264,12 +282,14 @@ export async function initPostgresSchema(poolInstance: pg.Pool): Promise<void> {
       console.log('🌱 [Database] Seeding unified fleet in Neon PostgreSQL...');
       await client.query(`
         INSERT INTO ambulances (id, vehicle_number, driver_user_id, driver_name, phone, type, base_location, status, current_latitude, current_longitude) VALUES
-        (1, 'KA-01-EA-1008', 2, 'Mohammed Irfan', '+91 97410 54321', 'Advanced Cardiac Life Support (ACLS)', 'Central Trauma Center, Block A', 'AVAILABLE', 12.9716, 77.5946),
+        (1, 'KA-01-EA-1008', '22222222-2222-4222-a222-222222222222', 'Mohammed Irfan', '+91 97410 54321', 'Advanced Cardiac Life Support (ACLS)', 'Central Trauma Center, Block A', 'AVAILABLE', 12.9716, 77.5946),
         (2, 'KA-05-EM-2044', NULL, 'Suresh Gowda', '+91 98860 67890', 'Basic Life Support (BLS)', 'Indiranagar Emergency Hub', 'AVAILABLE', 12.9783, 77.6408),
         (3, 'KA-03-AX-3091', NULL, 'Ramesh Kumar', '+91 98450 12345', 'Critical Care Response Unit', 'Jayanagar General Hospital', 'AVAILABLE', 12.9250, 77.5938)
         ON CONFLICT (id) DO NOTHING;
       `);
-      await client.query("SELECT setval(pg_get_serial_sequence('ambulances', 'id'), COALESCE(MAX(id), 1)) FROM ambulances;");
+      try {
+        await client.query("SELECT setval(pg_get_serial_sequence('ambulances', 'id'), COALESCE(MAX(id), 1)) FROM ambulances;");
+      } catch { /* sequence might not exist */ }
     }
 
     // 8. Seed hospitals into PostgreSQL if empty
@@ -283,7 +303,9 @@ export async function initPostgresSchema(poolInstance: pg.Pool): Promise<void> {
         (3, 'Manipal Hospital Bengaluru', 'Advanced Cardiac, Stroke & Multi-Organ ICU', '98, HAL Old Airport Rd, Kodihalli, Bengaluru 560017', 12.9590, 77.6531, '+91 80 2502 4444', 35, 12, 'AVAILABLE', 4.9, 'Multi-Specialty Emergency Hospital')
         ON CONFLICT (id) DO NOTHING;
       `);
-      await client.query("SELECT setval(pg_get_serial_sequence('hospitals', 'id'), COALESCE(MAX(id), 1)) FROM hospitals;");
+      try {
+        await client.query("SELECT setval(pg_get_serial_sequence('hospitals', 'id'), COALESCE(MAX(id), 1)) FROM hospitals;");
+      } catch { /* sequence might not exist */ }
     }
 
     console.log('✅ [Database] Neon PostgreSQL schemas verified and seeded.');

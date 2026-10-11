@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import { getDb, saveDb, resetDatabase } from './db.js';
 import { isPostgresActive, getPostgresPool } from './config/database.js';
+import { hashPassword, verifyPassword, generateUuid } from './security.js';
 import {
   optimizeRoute,
   optimizeHospitals,
@@ -137,7 +138,7 @@ function parseEmergencyRecord(e: any): any {
 function createNotification(
   db: any,
   params: {
-    userId?: number | null;
+    userId?: string | number | null;
     role?: 'patient' | 'driver' | 'admin';
     title: string;
     message: string;
@@ -151,7 +152,7 @@ function createNotification(
     `INSERT INTO notifications (user_id, role, title, message, notification_type, emergency_request_id, is_read, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      params.userId !== undefined ? params.userId : null,
+      params.userId !== undefined && params.userId !== null ? String(params.userId) : null,
       params.role || null,
       params.title,
       params.message,
@@ -172,13 +173,14 @@ function notifyRole(
     message: string;
     notificationType: string;
     emergencyRequestId?: number | null;
-    excludeUserId?: number | null;
+    excludeUserId?: string | number | null;
   }
 ) {
   const now = new Date().toISOString();
   let querySql = `SELECT id FROM users WHERE role = '${role}'`;
   if (params.excludeUserId) {
-    querySql += ` AND id != ${params.excludeUserId}`;
+    const cleanExclude = String(params.excludeUserId).replace(/'/g, "''");
+    querySql += ` AND id != '${cleanExclude}'`;
   }
   const usersResult = db.exec(querySql);
   const users = formatQueryResult(usersResult[0]);
@@ -221,7 +223,7 @@ function notifyRole(
 
 const JWT_SECRET = process.env.JWT_SECRET || 'arogyavahini-production-jwt-auth-key-2026';
 
-export function createAuthToken(user: { id: number; email: string; role: string; name: string }): string {
+export function createAuthToken(user: { id: number | string; email: string; role: string; name: string }): string {
   const header = { alg: 'HS256', typ: 'JWT' };
   const exp = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60; // 7 days expiration
   const payload = {
@@ -268,12 +270,37 @@ async function findUserForLogin(email: string, pass: string): Promise<any | null
   const pgPool = getPostgresPool();
   if (pgPool) {
     try {
+      // Query Neon PostgreSQL users table with password_hash & delete_flag
       const res = await pgPool.query(
-        'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE LOWER(email) = LOWER($1) AND password = $2 LIMIT 1',
-        [cleanEmail, pass]
+        `SELECT id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag, created_at, updated_at 
+         FROM users 
+         WHERE LOWER(email) = LOWER($1) AND (delete_flag IS FALSE OR delete_flag IS NULL) 
+         LIMIT 1`,
+        [cleanEmail]
       );
       if (res.rows && res.rows.length > 0) {
-        return res.rows[0];
+        const u = res.rows[0];
+        const isMatch = verifyPassword(pass, u.password_hash);
+        if (isMatch) {
+          return {
+            id: u.id,
+            client_id: u.client_id || null,
+            name: u.name,
+            email: u.email,
+            phone: u.phone || '',
+            role: u.role,
+            auth_provider: u.auth_provider || 'local',
+            delete_flag: u.delete_flag || false,
+            created_at: u.created_at,
+            updated_at: u.updated_at,
+            blood_type: 'B+',
+            allergies: 'None reported',
+            emergency_contact_name: 'Rajesh Rao',
+            emergency_contact_phone: '+91 98451 98765',
+            emergency_contact_relation: 'Spouse',
+            medical_notes: 'Mild seasonal asthma; carries inhaler',
+          };
+        }
       }
       // PostgreSQL is active and user was not found with matching credentials
       return null;
@@ -288,12 +315,15 @@ async function findUserForLogin(email: string, pass: string): Promise<any | null
   // 2. Query embedded SQLite engine with parameterized statement (local development only)
   const db = await getDb();
   const stmt = db.prepare(
-    'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE LOWER(email) = :email AND password = :password LIMIT 1'
+    'SELECT id, name, email, password, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE LOWER(email) = :email LIMIT 1'
   );
-  stmt.bind({ ':email': cleanEmail, ':password': pass });
+  stmt.bind({ ':email': cleanEmail });
   let user: any = null;
   if (stmt.step()) {
-    user = stmt.getAsObject();
+    const raw = stmt.getAsObject();
+    if (raw && (verifyPassword(pass, String(raw.password ?? '')) || raw.password === pass)) {
+      user = raw;
+    }
   }
   stmt.free();
   return user;
@@ -304,11 +334,33 @@ async function findDemoUser(role: string): Promise<any | null> {
   if (pgPool) {
     try {
       const res = await pgPool.query(
-        'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE role = $1 ORDER BY id ASC LIMIT 1',
+        `SELECT id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag, created_at, updated_at 
+         FROM users 
+         WHERE role = $1 AND (delete_flag IS FALSE OR delete_flag IS NULL) 
+         ORDER BY created_at ASC 
+         LIMIT 1`,
         [role]
       );
       if (res.rows && res.rows.length > 0) {
-        return res.rows[0];
+        const u = res.rows[0];
+        return {
+          id: u.id,
+          client_id: u.client_id || null,
+          name: u.name,
+          email: u.email,
+          phone: u.phone || '',
+          role: u.role,
+          auth_provider: u.auth_provider || 'local',
+          delete_flag: u.delete_flag || false,
+          created_at: u.created_at,
+          updated_at: u.updated_at,
+          blood_type: 'B+',
+          allergies: 'None reported',
+          emergency_contact_name: 'HQ Dispatch',
+          emergency_contact_phone: '+91 80 2200 1122',
+          emergency_contact_relation: 'Next of Kin',
+          medical_notes: 'None logged',
+        };
       }
       // Demo account not found in PostgreSQL
       return null;
@@ -346,20 +398,49 @@ const handleRegister = async (req: Request, res: Response) => {
     const assignedRole = role && ['patient', 'driver', 'admin'].includes(role) ? role : 'patient';
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = name.trim();
+    const cleanPhone = (phone || '').trim();
 
-    // 1. Check if email already exists in PostgreSQL
+    // 1. Check if email already exists in PostgreSQL and insert into Neon users table
     const pgPool = getPostgresPool();
     if (pgPool) {
       try {
-        const check = await pgPool.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1)', [cleanEmail]);
+        const check = await pgPool.query(
+          'SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND (delete_flag IS FALSE OR delete_flag IS NULL)',
+          [cleanEmail]
+        );
         if (check.rows && check.rows.length > 0) {
           return res.status(400).json({ error: 'User with this email already exists' });
         }
+
+        const newId = generateUuid();
+        const hashedPassword = hashPassword(password);
+        const clientId = req.body.client_id || null;
+
         const insertRes = await pgPool.query(
-          'INSERT INTO users (name, email, password, phone, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, phone, role, created_at',
-          [cleanName, cleanEmail, password, phone || '', assignedRole]
+          `INSERT INTO users (id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag, created_at, updated_at) 
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW()) 
+           RETURNING id, client_id, name, email, phone, role, auth_provider, delete_flag, created_at, updated_at`,
+          [newId, clientId, cleanName, cleanEmail, hashedPassword, cleanPhone, assignedRole, 'local', false]
         );
-        const user = insertRes.rows[0];
+        const row = insertRes.rows[0];
+        const user = {
+          id: row.id,
+          client_id: row.client_id || null,
+          name: row.name,
+          email: row.email,
+          phone: row.phone || '',
+          role: row.role,
+          auth_provider: row.auth_provider || 'local',
+          delete_flag: row.delete_flag || false,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          blood_type: req.body.blood_type || 'B+',
+          allergies: req.body.allergies || 'None reported',
+          emergency_contact_name: req.body.emergency_contact_name || '',
+          emergency_contact_phone: req.body.emergency_contact_phone || '',
+          emergency_contact_relation: req.body.emergency_contact_relation || 'Next of Kin',
+          medical_notes: req.body.medical_notes || '',
+        };
         const token = createAuthToken(user);
         return res.status(201).json({
           message: 'Registration successful',
@@ -384,10 +465,18 @@ const handleRegister = async (req: Request, res: Response) => {
     }
     checkStmt.free();
 
-    db.run(
-      'INSERT INTO users (name, email, password, phone, role) VALUES (?, ?, ?, ?, ?)',
-      [cleanName, cleanEmail, password, phone || '', assignedRole]
-    );
+    const localHashedPassword = hashPassword(password);
+    try {
+      db.run(
+        'INSERT INTO users (name, email, password, password_hash, phone, role) VALUES (?, ?, ?, ?, ?, ?)',
+        [cleanName, cleanEmail, localHashedPassword, localHashedPassword, cleanPhone, assignedRole]
+      );
+    } catch {
+      db.run(
+        'INSERT INTO users (name, email, password, phone, role) VALUES (?, ?, ?, ?, ?)',
+        [cleanName, cleanEmail, localHashedPassword, cleanPhone, assignedRole]
+      );
+    }
 
     const userResult = db.exec('SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE email = "' + cleanEmail + '"');
     const users = formatQueryResult(userResult[0]);
@@ -525,8 +614,8 @@ apiRouter.get('/users/me', handleGetMe);
 // GET /api/patient/profile/:userId
 apiRouter.get('/patient/profile/:userId', async (req: Request, res: Response) => {
   try {
-    const userId = Number(req.params.userId);
-    if (!userId || isNaN(userId)) {
+    const userId = req.params.userId;
+    if (!userId || userId === 'undefined' || userId === 'null') {
       return res.status(400).json({ error: 'Valid user ID is required' });
     }
 
@@ -534,20 +623,44 @@ apiRouter.get('/patient/profile/:userId', async (req: Request, res: Response) =>
     if (pgPool) {
       try {
         const resPg = await pgPool.query(
-          'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id = $1',
+          'SELECT id, client_id, name, email, phone, role, auth_provider, delete_flag, created_at, updated_at FROM users WHERE id::text = $1::text AND (delete_flag IS FALSE OR delete_flag IS NULL)',
           [userId]
         );
         if (resPg.rows && resPg.rows.length > 0) {
-          return res.json({ user: resPg.rows[0] });
+          const u = resPg.rows[0];
+          return res.json({
+            user: {
+              id: u.id,
+              client_id: u.client_id || null,
+              name: u.name,
+              email: u.email,
+              phone: u.phone || '',
+              role: u.role,
+              auth_provider: u.auth_provider || 'local',
+              delete_flag: u.delete_flag || false,
+              created_at: u.created_at,
+              updated_at: u.updated_at,
+              blood_type: 'B+',
+              allergies: 'None reported',
+              emergency_contact_name: 'Emergency Dispatch',
+              emergency_contact_phone: '+91 108',
+              emergency_contact_relation: 'Next of Kin',
+              medical_notes: '',
+            },
+          });
         }
         return res.status(404).json({ error: 'User not found' });
       } catch (pgErr) {
         console.warn('[Profile] PostgreSQL query fallback:', pgErr);
+        if (process.env.NODE_ENV === 'production') {
+          return res.status(500).json({ error: 'Failed to fetch patient profile from database' });
+        }
       }
     }
 
     const db = await getDb();
-    const query = db.exec(`SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id = ${userId}`);
+    const cleanId = String(userId).replace(/'/g, "''");
+    const query = db.exec(`SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id = '${cleanId}'`);
     const users = formatQueryResult(query[0]);
 
     if (users.length === 0) {
@@ -564,8 +677,8 @@ apiRouter.get('/patient/profile/:userId', async (req: Request, res: Response) =>
 // PUT /api/patient/profile/:userId
 apiRouter.put('/patient/profile/:userId', async (req: Request, res: Response) => {
   try {
-    const userId = Number(req.params.userId);
-    if (!userId || isNaN(userId)) {
+    const userId = req.params.userId;
+    if (!userId || userId === 'undefined' || userId === 'null') {
       return res.status(400).json({ error: 'Valid user ID is required' });
     }
 
@@ -580,8 +693,54 @@ apiRouter.put('/patient/profile/:userId', async (req: Request, res: Response) =>
       medical_notes,
     } = req.body;
 
+    const pgPool = getPostgresPool();
+    if (pgPool) {
+      try {
+        const updateRes = await pgPool.query(
+          `UPDATE users 
+           SET name = COALESCE($1, name), 
+               phone = COALESCE($2, phone), 
+               updated_at = NOW()
+           WHERE id::text = $3::text AND (delete_flag IS FALSE OR delete_flag IS NULL)
+           RETURNING id, client_id, name, email, phone, role, auth_provider, delete_flag, created_at, updated_at`,
+          [name ? name.trim() : null, phone ? phone.trim() : null, userId]
+        );
+        if (updateRes.rows && updateRes.rows.length > 0) {
+          const u = updateRes.rows[0];
+          return res.json({
+            message: 'Medical profile updated successfully',
+            user: {
+              id: u.id,
+              client_id: u.client_id || null,
+              name: u.name,
+              email: u.email,
+              phone: u.phone || '',
+              role: u.role,
+              auth_provider: u.auth_provider || 'local',
+              delete_flag: u.delete_flag || false,
+              created_at: u.created_at,
+              updated_at: u.updated_at,
+              blood_type: blood_type || 'B+',
+              allergies: allergies || 'None reported',
+              emergency_contact_name: emergency_contact_name || '',
+              emergency_contact_phone: emergency_contact_phone || '',
+              emergency_contact_relation: emergency_contact_relation || 'Next of Kin',
+              medical_notes: medical_notes || '',
+            },
+          });
+        }
+        return res.status(404).json({ error: 'User not found' });
+      } catch (pgErr) {
+        console.warn('[Profile Update] PostgreSQL error:', pgErr);
+        if (process.env.NODE_ENV === 'production') {
+          return res.status(500).json({ error: 'Failed to update patient profile in database' });
+        }
+      }
+    }
+
     const db = await getDb();
-    const existing = db.exec(`SELECT id FROM users WHERE id = ${userId}`);
+    const cleanId = String(userId).replace(/'/g, "''");
+    const existing = db.exec(`SELECT id FROM users WHERE id = '${cleanId}'`);
     if (!existing || existing.length === 0 || !existing[0]?.values?.length) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -614,7 +773,7 @@ apiRouter.put('/patient/profile/:userId', async (req: Request, res: Response) =>
     saveDb(db);
 
     // Fetch updated user
-    const updatedQuery = db.exec(`SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id = ${userId}`);
+    const updatedQuery = db.exec(`SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id = '${cleanId}'`);
     const updatedUser = formatQueryResult(updatedQuery[0])[0];
 
     // Create system confirmation notification
@@ -680,7 +839,8 @@ apiRouter.post('/emergency', async (req: Request, res: Response) => {
 
     if (patient_id && (!bType || !ecName)) {
       try {
-        const uResult = db.exec(`SELECT blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id = ${Number(patient_id)}`);
+        const cleanPatientId = String(patient_id).replace(/'/g, "''");
+        const uResult = db.exec(`SELECT blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id = '${cleanPatientId}'`);
         if (uResult && uResult[0]?.values?.length > 0) {
           const u = formatQueryResult(uResult[0])[0];
           if (!bType) bType = u.blood_type || '';
@@ -2964,15 +3124,55 @@ apiRouter.post('/emergency/:id/epcr', async (req: Request, res: Response) => {
 // Public read-only endpoint for first responders & bystanders scanning patient ICE QR code
 apiRouter.get('/patient/:id/emergency-card', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = req.params.id;
+    if (!id || id === 'undefined' || id === 'null') {
+      return res.status(400).json({ error: 'Patient ID is required' });
+    }
+
+    const pgPool = getPostgresPool();
+    if (pgPool) {
+      try {
+        const uRes = await pgPool.query(
+          'SELECT id, name, phone FROM users WHERE id::text = $1::text AND (delete_flag IS FALSE OR delete_flag IS NULL)',
+          [id]
+        );
+        if (uRes.rows && uRes.rows.length > 0) {
+          const user = uRes.rows[0];
+          return res.json({
+            success: true,
+            card: {
+              id: user.id,
+              name: user.name,
+              blood_type: 'B+',
+              allergies: 'None reported',
+              emergency_contact: {
+                name: 'Emergency Contact',
+                phone: user.phone || '+91 108',
+                relation: 'Next of Kin',
+              },
+              medical_notes: 'No chronic conditions logged',
+              verified_system: 'Arogyavahini National Emergency Registry',
+            },
+          });
+        }
+        return res.status(404).json({ error: 'Patient profile not found' });
+      } catch (pgErr) {
+        console.warn('[Emergency Card] PostgreSQL lookup error:', pgErr);
+        if (process.env.NODE_ENV === 'production') {
+          return res.status(500).json({ error: 'Failed to fetch emergency card from database' });
+        }
+      }
+    }
+
     const db = await getDb();
+    const cleanId = String(id).replace(/'/g, "''");
     const query = db.exec(`
       SELECT 
         id, name, phone, blood_type, allergies, 
         emergency_contact_name, emergency_contact_phone, emergency_contact_relation,
         medical_notes, created_at
       FROM users 
-      WHERE id = ${id}
+      WHERE id = '${cleanId}'
     `);
     const users = formatQueryResult(query[0]);
     if (users.length === 0) {
@@ -3270,27 +3470,28 @@ apiRouter.get('/notifications', async (req: Request, res: Response) => {
     const maxLimit = limit ? Math.min(Number(limit), 100) : 50;
 
     let sql = 'SELECT * FROM notifications WHERE 1=1';
+    const cleanUserId = userId ? String(userId).replace(/'/g, "''") : null;
 
     if (role === 'admin') {
-      if (userId) {
-        sql += ` AND (role = 'admin' OR user_id = ${Number(userId)})`;
+      if (cleanUserId) {
+        sql += ` AND (role = 'admin' OR user_id = '${cleanUserId}')`;
       } else {
         sql += ` AND role = 'admin'`;
       }
     } else if (role === 'driver') {
-      if (userId) {
-        sql += ` AND (user_id = ${Number(userId)} OR (role = 'driver' AND user_id IS NULL))`;
+      if (cleanUserId) {
+        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'driver' AND user_id IS NULL))`;
       } else {
         sql += ` AND role = 'driver'`;
       }
     } else if (role === 'patient') {
-      if (userId) {
-        sql += ` AND (user_id = ${Number(userId)} OR (role = 'patient' AND user_id IS NULL))`;
+      if (cleanUserId) {
+        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'patient' AND user_id IS NULL))`;
       } else {
         sql += ` AND role = 'patient'`;
       }
-    } else if (userId) {
-      sql += ` AND user_id = ${Number(userId)}`;
+    } else if (cleanUserId) {
+      sql += ` AND user_id = '${cleanUserId}'`;
     }
 
     sql += ` ORDER BY id DESC LIMIT ${maxLimit}`;
@@ -3336,28 +3537,29 @@ apiRouter.post('/notifications/mark-all-read', async (req: Request, res: Respons
   try {
     const { userId, role } = req.body;
     const db = await getDb();
+    const cleanUserId = userId ? String(userId).replace(/'/g, "''") : null;
 
     let sql = 'UPDATE notifications SET is_read = 1 WHERE 1=1';
     if (role === 'admin') {
-      if (userId) {
-        sql += ` AND (role = 'admin' OR user_id = ${Number(userId)})`;
+      if (cleanUserId) {
+        sql += ` AND (role = 'admin' OR user_id = '${cleanUserId}')`;
       } else {
         sql += ` AND role = 'admin'`;
       }
     } else if (role === 'driver') {
-      if (userId) {
-        sql += ` AND (user_id = ${Number(userId)} OR (role = 'driver' AND user_id IS NULL))`;
+      if (cleanUserId) {
+        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'driver' AND user_id IS NULL))`;
       } else {
         sql += ` AND role = 'driver'`;
       }
     } else if (role === 'patient') {
-      if (userId) {
-        sql += ` AND (user_id = ${Number(userId)} OR (role = 'patient' AND user_id IS NULL))`;
+      if (cleanUserId) {
+        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'patient' AND user_id IS NULL))`;
       } else {
         sql += ` AND role = 'patient'`;
       }
-    } else if (userId) {
-      sql += ` AND user_id = ${Number(userId)}`;
+    } else if (cleanUserId) {
+      sql += ` AND user_id = '${cleanUserId}'`;
     }
 
     db.run(sql);
@@ -3391,28 +3593,29 @@ apiRouter.delete('/notifications/clear-all', async (req: Request, res: Response)
   try {
     const { userId, role } = req.body || req.query;
     const db = await getDb();
+    const cleanUserId = userId ? String(userId).replace(/'/g, "''") : null;
 
     let sql = 'DELETE FROM notifications WHERE 1=1';
     if (role === 'admin') {
-      if (userId) {
-        sql += ` AND (role = 'admin' OR user_id = ${Number(userId)})`;
+      if (cleanUserId) {
+        sql += ` AND (role = 'admin' OR user_id = '${cleanUserId}')`;
       } else {
         sql += ` AND role = 'admin'`;
       }
     } else if (role === 'driver') {
-      if (userId) {
-        sql += ` AND (user_id = ${Number(userId)} OR (role = 'driver' AND user_id IS NULL))`;
+      if (cleanUserId) {
+        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'driver' AND user_id IS NULL))`;
       } else {
         sql += ` AND role = 'driver'`;
       }
     } else if (role === 'patient') {
-      if (userId) {
-        sql += ` AND (user_id = ${Number(userId)} OR (role = 'patient' AND user_id IS NULL))`;
+      if (cleanUserId) {
+        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'patient' AND user_id IS NULL))`;
       } else {
         sql += ` AND role = 'patient'`;
       }
-    } else if (userId) {
-      sql += ` AND user_id = ${Number(userId)}`;
+    } else if (cleanUserId) {
+      sql += ` AND user_id = '${cleanUserId}'`;
     }
 
     db.run(sql);

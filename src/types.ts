@@ -1,12 +1,16 @@
 export type UserRole = 'patient' | 'driver' | 'admin';
 
 export interface User {
-  id: number;
+  id: number | string;
+  client_id?: string | null;
   name: string;
   email: string;
   phone?: string;
   role: UserRole;
+  auth_provider?: string;
+  delete_flag?: boolean;
   created_at?: string;
+  updated_at?: string;
 
   // Patient Medical Profile & Emergency Contact
   blood_type?: string;
@@ -29,14 +33,14 @@ export interface PatientMedicalProfile {
 export type AmbulanceStatus = 'AVAILABLE' | 'ASSIGNED' | 'BUSY' | 'MAINTENANCE';
 
 export interface Ambulance {
-  id: number;
+  id: number | string;
   vehicle_number: string;
   driver_name: string;
   phone: string;
   type: string;
   base_location: string;
   status: AmbulanceStatus;
-  driver_user_id?: number | null;
+  driver_user_id?: number | string | null;
   current_latitude?: number | null;
   current_longitude?: number | null;
   last_gps_update?: string | null;
@@ -107,7 +111,7 @@ export interface HospitalOption {
 
 export interface EmergencyRequest {
   id: number;
-  patient_id?: number | null;
+  patient_id?: number | string | null;
   patient_name: string;
   emergency_type: string;
   location: string;
@@ -117,7 +121,7 @@ export interface EmergencyRequest {
   patient_longitude?: number | null;
   phone: string;
   notes?: string;
-  driver_id?: number | null;
+  driver_id?: number | string | null;
   ambulance_id?: number | null;
   status: EmergencyStatus;
   created_at: string;
@@ -254,8 +258,8 @@ export type NotificationType =
   | 'SYSTEM_ALERT';
 
 export interface AppNotification {
-  id: number;
-  user_id?: number | null;
+  id: number | string;
+  user_id?: number | string | null;
   role?: UserRole | null;
   title: string;
   message: string;

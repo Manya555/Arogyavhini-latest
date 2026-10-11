@@ -4,25 +4,25 @@ export * from './Ambulance.js';
 export * from './EmergencyRequest.js';
 
 /**
- * Initializes the PostgreSQL schema and core tables if they do not already exist
+ * Initializes the PostgreSQL schema and core tables matching actual Neon PostgreSQL schema
  */
 export async function initPostgresSchema(): Promise<void> {
   console.log('[PostgreSQL]: Verifying and initializing core schemas (Users, Ambulances, EmergencyRequests)...');
 
   const ddl = `
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
     CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      client_id UUID,
       name VARCHAR(150) NOT NULL,
       email VARCHAR(255) UNIQUE NOT NULL,
-      password VARCHAR(255) NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
       phone VARCHAR(30),
       role VARCHAR(30) NOT NULL CHECK (role IN ('patient', 'driver', 'admin')),
-      blood_type VARCHAR(10) DEFAULT 'B+',
-      allergies TEXT DEFAULT 'None reported',
-      medical_notes TEXT,
-      emergency_contact_name VARCHAR(150),
-      emergency_contact_phone VARCHAR(30),
-      emergency_contact_relation VARCHAR(50) DEFAULT 'Next of Kin',
+      auth_provider VARCHAR(50) DEFAULT 'local',
+      delete_flag BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
@@ -33,9 +33,8 @@ export async function initPostgresSchema(): Promise<void> {
     CREATE TABLE IF NOT EXISTS ambulances (
       id SERIAL PRIMARY KEY,
       vehicle_number VARCHAR(50) UNIQUE NOT NULL,
-      type VARCHAR(30) NOT NULL DEFAULT 'ADVANCED_LIFE_SUPPORT' 
-          CHECK (type IN ('ADVANCED_LIFE_SUPPORT', 'BASIC_LIFE_SUPPORT', 'CARDIAC_CARE_UNIT', 'NEONATAL_ICU')),
-      driver_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      type VARCHAR(50) NOT NULL DEFAULT 'ADVANCED_LIFE_SUPPORT',
+      driver_user_id VARCHAR(50),
       driver_name VARCHAR(150),
       phone VARCHAR(30),
       base_location VARCHAR(200) NOT NULL,
@@ -53,7 +52,7 @@ export async function initPostgresSchema(): Promise<void> {
 
     CREATE TABLE IF NOT EXISTS emergency_requests (
       id SERIAL PRIMARY KEY,
-      patient_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      patient_id VARCHAR(50),
       patient_name VARCHAR(150) NOT NULL,
       emergency_type VARCHAR(100) NOT NULL,
       location VARCHAR(255) NOT NULL,
@@ -61,7 +60,7 @@ export async function initPostgresSchema(): Promise<void> {
       longitude DECIMAL(10, 7) NOT NULL,
       phone VARCHAR(30) NOT NULL,
       notes TEXT,
-      driver_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      driver_id VARCHAR(50),
       ambulance_id INTEGER REFERENCES ambulances(id) ON DELETE SET NULL,
       status VARCHAR(40) NOT NULL DEFAULT 'WAITING_FOR_DRIVER' 
           CHECK (status IN (

@@ -9,17 +9,27 @@ const { Pool } = pg;
  * PostgreSQL Connection Pool Configuration using node-postgres (pg)
  * Supports connection via full DATABASE_URL or individual PG* environment variables
  */
-const connectionString = process.env.DATABASE_URL;
+const connectionString = (
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL ||
+  process.env.POSTGRES_PRISMA_URL ||
+  process.env.POSTGRES_URL_NON_POOLING ||
+  ''
+).trim();
+
+const useSsl =
+  process.env.DB_SSL === 'true' ||
+  connectionString.includes('sslmode=require') ||
+  connectionString.includes('neon.tech') ||
+  process.env.NODE_ENV === 'production';
 
 const poolConfig: pg.PoolConfig = connectionString
   ? {
       connectionString,
-      ssl: process.env.DB_SSL === 'true' || connectionString.includes('sslmode=require')
-        ? { rejectUnauthorized: false }
-        : false,
+      ssl: useSsl ? { rejectUnauthorized: false } : false,
       max: parseInt(process.env.PG_MAX_POOL || '20', 10),
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
+      connectionTimeoutMillis: 10000,
     }
   : {
       host: process.env.PGHOST || 'localhost',
@@ -27,10 +37,10 @@ const poolConfig: pg.PoolConfig = connectionString
       user: process.env.PGUSER || 'postgres',
       password: process.env.PGPASSWORD || 'postgres',
       database: process.env.PGDATABASE || 'arogyavahini',
-      ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+      ssl: useSsl ? { rejectUnauthorized: false } : false,
       max: parseInt(process.env.PG_MAX_POOL || '20', 10),
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
+      connectionTimeoutMillis: 10000,
     };
 
 export const pool = new Pool(poolConfig);

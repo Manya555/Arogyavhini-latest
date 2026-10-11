@@ -25,7 +25,7 @@ export interface Ambulance {
   id: number;
   vehicle_number: string;
   type: AmbulanceType;
-  driver_user_id?: number | null;
+  driver_user_id?: string | number | null;
   driver_name?: string | null;
   phone?: string | null;
   base_location: string;
@@ -41,7 +41,7 @@ export interface Ambulance {
 export interface CreateAmbulanceInput {
   vehicle_number: string;
   type?: AmbulanceType;
-  driver_user_id?: number;
+  driver_user_id?: string | number;
   driver_name?: string;
   phone?: string;
   base_location: string;
@@ -84,10 +84,10 @@ export class AmbulanceModel {
   /**
    * Find ambulance assigned to a specific driver
    */
-  static async findByDriverUserId(driverUserId: number): Promise<Ambulance | null> {
+  static async findByDriverUserId(driverUserId: string | number): Promise<Ambulance | null> {
     const res = await query<Ambulance>(
-      `SELECT * FROM ambulances WHERE driver_user_id = $1 LIMIT 1`,
-      [driverUserId]
+      `SELECT * FROM ambulances WHERE driver_user_id::text = $1::text LIMIT 1`,
+      [String(driverUserId)]
     );
     return res.rows[0] || null;
   }
@@ -117,7 +117,7 @@ export class AmbulanceModel {
       [
         input.vehicle_number,
         input.type || 'ADVANCED_LIFE_SUPPORT',
-        input.driver_user_id || null,
+        input.driver_user_id ? String(input.driver_user_id) : null,
         input.driver_name || null,
         input.phone || null,
         input.base_location,

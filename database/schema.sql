@@ -17,21 +17,15 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- 1. USERS TABLE (Role-Based Authentication & Profiles)
 -- ==============================================================================
 CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id UUID,
     name VARCHAR(150) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
     phone VARCHAR(30),
     role VARCHAR(30) NOT NULL CHECK (role IN ('patient', 'driver', 'admin')),
-    
-    -- Encrypted Patient Medical Snapshot
-    blood_type VARCHAR(10) DEFAULT 'B+',
-    allergies TEXT DEFAULT 'None reported',
-    medical_notes TEXT,
-    emergency_contact_name VARCHAR(150),
-    emergency_contact_phone VARCHAR(30),
-    emergency_contact_relation VARCHAR(50) DEFAULT 'Next of Kin',
-    
+    auth_provider VARCHAR(50) DEFAULT 'local',
+    delete_flag BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -58,7 +52,7 @@ CREATE TABLE IF NOT EXISTS patients (
 -- ==============================================================================
 CREATE TABLE IF NOT EXISTS drivers (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     license_number VARCHAR(80) UNIQUE NOT NULL,
     badge_number VARCHAR(50) UNIQUE,
     experience_years INTEGER DEFAULT 3,
@@ -74,7 +68,7 @@ CREATE TABLE IF NOT EXISTS ambulances (
     id SERIAL PRIMARY KEY,
     vehicle_number VARCHAR(50) UNIQUE NOT NULL,
     type VARCHAR(30) NOT NULL DEFAULT 'ADVANCED_LIFE_SUPPORT' CHECK (type IN ('ADVANCED_LIFE_SUPPORT', 'BASIC_LIFE_SUPPORT', 'CARDIAC_CARE_UNIT', 'NEONATAL_ICU')),
-    driver_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    driver_user_id VARCHAR(50),
     driver_name VARCHAR(150),
     phone VARCHAR(30),
     base_location VARCHAR(200) NOT NULL,
@@ -288,18 +282,18 @@ CREATE INDEX IF NOT EXISTS idx_system_logs_emergency ON system_logs(emergency_id
 -- SEED DATA (Demo Setup for Presentation & Viva Demonstration)
 -- ==============================================================================
 
--- 1. Users
-INSERT INTO users (id, name, email, password, phone, role, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation)
+-- 1. Users (using UUIDs and password_hash bcrypt)
+INSERT INTO users (id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag)
 VALUES 
-  (1, 'Pooja Sharma', 'pooja.patient@arogyavahini.gov.in', 'password123', '+91 98765 43210', 'patient', 'B+', 'Penicillin, NSAIDs (Aspirin)', 'Rajesh Sharma', '+91 98451 98765', 'Spouse'),
-  (2, 'Ramesh Kumar', 'ramesh.driver@arogyavahini.gov.in', 'password123', '+91 98765 11111', 'driver', 'O+', 'None', 'Sunita Kumar', '+91 98765 22222', 'Spouse'),
-  (3, 'Dr. Aris Thorne', 'admin@arogyavahini.gov.in', 'password123', '+91 98765 00000', 'admin', 'A+', 'None', 'HQ Dispatch', '+91 80 2296 1000', 'Control Room')
+  ('11111111-1111-4111-a111-111111111111', '00000000-0000-0000-0000-000000000001', 'Pooja Sharma', 'pooja.patient@arogyavahini.gov.in', '$2a$10$wK1c7FvV2w6nNn8t1jUvxeY71vQ5tZ8W8N1m5k0h8z2l4b6n8q0y', '+91 98765 43210', 'patient', 'local', false),
+  ('22222222-2222-4222-a222-222222222222', '00000000-0000-0000-0000-000000000001', 'Ramesh Kumar', 'ramesh.driver@arogyavahini.gov.in', '$2a$10$wK1c7FvV2w6nNn8t1jUvxeY71vQ5tZ8W8N1m5k0h8z2l4b6n8q0y', '+91 98765 11111', 'driver', 'local', false),
+  ('33333333-3333-4333-a333-333333333333', '00000000-0000-0000-0000-000000000001', 'Dr. Aris Thorne', 'admin@arogyavahini.gov.in', '$2a$10$wK1c7FvV2w6nNn8t1jUvxeY71vQ5tZ8W8N1m5k0h8z2l4b6n8q0y', '+91 98765 00000', 'admin', 'local', false)
 ON CONFLICT (email) DO NOTHING;
 
 -- 2. Ambulances
 INSERT INTO ambulances (id, vehicle_number, type, driver_user_id, driver_name, phone, base_location, current_latitude, current_longitude, current_address, status)
 VALUES
-  (1, 'KA-01-EA-1081', 'ADVANCED_LIFE_SUPPORT', 2, 'Ramesh Kumar', '+91 98765 11111', 'Victoria Hospital Emergency Base, Bangalore', 12.9628, 77.5756, 'Victoria Hospital Base, Kalasipalya', 'AVAILABLE'),
+  (1, 'KA-01-EA-1081', 'ADVANCED_LIFE_SUPPORT', '22222222-2222-4222-a222-222222222222', 'Ramesh Kumar', '+91 98765 11111', 'Victoria Hospital Emergency Base, Bangalore', 12.9628, 77.5756, 'Victoria Hospital Base, Kalasipalya', 'AVAILABLE'),
   (2, 'KA-01-EA-1082', 'CARDIAC_CARE_UNIT', NULL, 'Suresh Gowda', '+91 98765 22222', 'Bowring & Lady Curzon Hospital, Shivaji Nagar', 12.9833, 77.6033, 'Shivaji Nagar Trauma Hub', 'AVAILABLE'),
   (3, 'KA-01-EA-1083', 'BASIC_LIFE_SUPPORT', NULL, 'Mahesh Patel', '+91 98765 33333', 'Manipal Hospital, Old Airport Road', 12.9592, 77.6534, 'Indiranagar Flyover Junction', 'AVAILABLE'),
   (4, 'KA-01-EA-1084', 'NEONATAL_ICU', NULL, 'Anil Verma', '+91 98765 44444', 'Apollo Hospitals, Bannerghatta Road', 12.8948, 77.5985, 'Bannerghatta Tech Corridor', 'AVAILABLE')
@@ -314,6 +308,5 @@ VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- Reset sequence counters
-SELECT setval('users_id_seq', (SELECT MAX(id) FROM users));
 SELECT setval('ambulances_id_seq', (SELECT MAX(id) FROM ambulances));
 SELECT setval('hospitals_id_seq', (SELECT MAX(id) FROM hospitals));

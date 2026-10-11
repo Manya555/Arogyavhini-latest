@@ -114,7 +114,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 
 export const api = {
   // Notifications
-  async getNotifications(params?: { userId?: number; role?: UserRole; limit?: number }): Promise<{ count: number; unreadCount: number; notifications: AppNotification[] }> {
+  async getNotifications(params?: { userId?: number | string; role?: UserRole; limit?: number }): Promise<{ count: number; unreadCount: number; notifications: AppNotification[] }> {
     const query = new URLSearchParams();
     if (params?.userId) query.set('userId', params.userId.toString());
     if (params?.role) query.set('role', params.role);
@@ -125,14 +125,14 @@ export const api = {
     return handleResponse(res);
   },
 
-  async markNotificationRead(id: number): Promise<{ message: string; id: number }> {
+  async markNotificationRead(id: number | string): Promise<{ message: string; id: number | string }> {
     const res = await fetch(`${API_BASE}/notifications/${id}/read`, {
       method: 'PATCH',
     });
     return handleResponse(res);
   },
 
-  async markAllNotificationsRead(params: { userId?: number; role?: UserRole }): Promise<{ message: string }> {
+  async markAllNotificationsRead(params: { userId?: number | string; role?: UserRole }): Promise<{ message: string }> {
     const res = await fetch(`${API_BASE}/notifications/mark-all-read`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -141,14 +141,14 @@ export const api = {
     return handleResponse(res);
   },
 
-  async deleteNotification(id: number): Promise<{ message: string; id: number }> {
+  async deleteNotification(id: number | string): Promise<{ message: string; id: number | string }> {
     const res = await fetch(`${API_BASE}/notifications/${id}`, {
       method: 'DELETE',
     });
     return handleResponse(res);
   },
 
-  async clearAllNotifications(params: { userId?: number; role?: UserRole }): Promise<{ message: string }> {
+  async clearAllNotifications(params: { userId?: number | string; role?: UserRole }): Promise<{ message: string }> {
     const res = await fetch(`${API_BASE}/notifications/clear-all`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
@@ -204,12 +204,12 @@ export const api = {
   },
 
   // Patient Medical Profile Management
-  async getPatientProfile(userId: number): Promise<{ user: User }> {
+  async getPatientProfile(userId: number | string): Promise<{ user: User }> {
     const res = await fetch(`${API_BASE}/patient/profile/${userId}`);
     return handleResponse(res);
   },
 
-  async updatePatientProfile(userId: number, profileData: Partial<User>): Promise<{ user: User; message: string }> {
+  async updatePatientProfile(userId: number | string, profileData: Partial<User>): Promise<{ user: User; message: string }> {
     const res = await fetch(`${API_BASE}/patient/profile/${userId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

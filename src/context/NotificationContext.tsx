@@ -11,9 +11,9 @@ interface NotificationContextType {
   isOnline: boolean;
   setIsOnline: (online: boolean) => void;
   fetchNotifications: () => Promise<void>;
-  markAsRead: (id: number) => Promise<void>;
+  markAsRead: (id: number | string) => Promise<void>;
   markAllAsRead: () => Promise<void>;
-  deleteNotification: (id: number) => Promise<void>;
+  deleteNotification: (id: number | string) => Promise<void>;
   clearAll: () => Promise<void>;
   addNotification: (notification: Partial<AppNotification> & { title: string; message: string }) => AppNotification;
   notify: (title: string, message: string, type?: string) => AppNotification;
@@ -26,7 +26,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(false);
-  const [lastKnownIds, setLastKnownIds] = useState<Set<number>>(new Set());
+  const [lastKnownIds, setLastKnownIds] = useState<Set<number | string>>(new Set());
   const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
 
   const addNotification = useCallback((input: Partial<AppNotification> & { title: string; message: string }) => {
@@ -115,7 +115,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   }, [isAuthenticated, user?.id, user?.role]);
 
-  const markAsRead = async (id: number) => {
+  const markAsRead = async (id: number | string) => {
     try {
       // Optimistic local update
       setNotifications((prev) =>
@@ -148,7 +148,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   };
 
-  const deleteNotification = async (id: number) => {
+  const deleteNotification = async (id: number | string) => {
     try {
       const target = notifications.find((n) => n.id === id);
       setNotifications((prev) => prev.filter((n) => n.id !== id));

@@ -11,7 +11,7 @@ export type EmergencyStatus =
 
 export interface EmergencyRequest {
   id: number;
-  patient_id?: number | null;
+  patient_id?: string | number | null;
   patient_name: string;
   emergency_type: string;
   location: string;
@@ -19,7 +19,7 @@ export interface EmergencyRequest {
   longitude: number;
   phone: string;
   notes?: string | null;
-  driver_id?: number | null;
+  driver_id?: string | number | null;
   ambulance_id?: number | null;
   status: EmergencyStatus;
   patient_blood_type?: string | null;
@@ -52,7 +52,7 @@ export interface EmergencyRequest {
 }
 
 export interface CreateEmergencyRequestInput {
-  patient_id?: number;
+  patient_id?: string | number;
   patient_name: string;
   emergency_type: string;
   location: string;
@@ -82,7 +82,7 @@ export class EmergencyRequestModel {
              u.name as driver_name
       FROM emergency_requests er
       LEFT JOIN ambulances a ON er.ambulance_id = a.id
-      LEFT JOIN users u ON er.driver_id = u.id
+      LEFT JOIN users u ON er.driver_id::text = u.id::text
     `;
 
     if (status) {
@@ -109,7 +109,7 @@ export class EmergencyRequestModel {
               u.name as driver_name
        FROM emergency_requests er
        LEFT JOIN ambulances a ON er.ambulance_id = a.id
-       LEFT JOIN users u ON er.driver_id = u.id
+       LEFT JOIN users u ON er.driver_id::text = u.id::text
        WHERE er.id = $1 LIMIT 1`,
       [id]
     );
@@ -119,16 +119,16 @@ export class EmergencyRequestModel {
   /**
    * Find the active emergency request for a driver
    */
-  static async findActiveByDriverId(driverId: number): Promise<EmergencyRequest | null> {
+  static async findActiveByDriverId(driverId: string | number): Promise<EmergencyRequest | null> {
     const res = await query<EmergencyRequest>(
       `SELECT er.*, a.vehicle_number, u.name as driver_name
        FROM emergency_requests er
        LEFT JOIN ambulances a ON er.ambulance_id = a.id
-       LEFT JOIN users u ON er.driver_id = u.id
-       WHERE er.driver_id = $1 
+       LEFT JOIN users u ON er.driver_id::text = u.id::text
+       WHERE er.driver_id::text = $1::text 
          AND er.status IN ('DRIVER_ACCEPTED', 'ON_THE_WAY', 'REACHED', 'TRANSFERRING_TO_HOSPITAL')
        ORDER BY er.created_at DESC LIMIT 1`,
-      [driverId]
+      [String(driverId)]
     );
     return res.rows[0] || null;
   }
@@ -149,7 +149,7 @@ export class EmergencyRequestModel {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'WAITING_FOR_DRIVER')
       RETURNING *`,
       [
-        input.patient_id || null,
+        input.patient_id ? String(input.patient_id) : null,
         input.patient_name,
         input.emergency_type,
         input.location,
@@ -176,7 +176,7 @@ export class EmergencyRequestModel {
    */
   static async assignDriverAndAmbulance(
     id: number,
-    driverId: number,
+    driverId: string | number,
     ambulanceId: number
   ): Promise<EmergencyRequest | null> {
     const res = await query<EmergencyRequest>(
@@ -188,7 +188,7 @@ export class EmergencyRequestModel {
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $3
        RETURNING *`,
-      [driverId, ambulanceId, id]
+      [String(driverId), ambulanceId, id]
     );
     return res.rows[0] || null;
   }

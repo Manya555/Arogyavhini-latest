@@ -333,10 +333,16 @@ function ensureMedicalProfileColumns(db: Database) {
         ['emergency_contact_phone', 'TEXT'],
         ['emergency_contact_relation', 'TEXT'],
         ['medical_notes', 'TEXT'],
+        ['password_hash', 'TEXT'],
+        ['client_id', 'TEXT'],
+        ['auth_provider', 'TEXT'],
+        ['delete_flag', 'INTEGER DEFAULT 0'],
       ];
       for (const [colName, colType] of userColsToAdd) {
         if (!userCols.includes(colName)) {
-          db.run(`ALTER TABLE users ADD COLUMN ${colName} ${colType};`);
+          try {
+            db.run(`ALTER TABLE users ADD COLUMN ${colName} ${colType};`);
+          } catch { /* column might already exist */ }
         }
       }
     }
@@ -382,6 +388,12 @@ function ensureMedicalProfileColumns(db: Database) {
           medical_notes = COALESCE(NULLIF(medical_notes, ''), 'Mild seasonal asthma; carries inhaler')
         WHERE id = 1 AND (blood_type IS NULL OR blood_type = '');
       `);
+
+      db.run(`
+        UPDATE users 
+        SET password_hash = password
+        WHERE (password_hash IS NULL OR password_hash = '') AND password IS NOT NULL;
+      `);
     } catch {
       // ignore
     }
@@ -398,13 +410,13 @@ export function seedInitialData(db: Database) {
   if (userCount === 0) {
     console.log('Seeding standard user accounts...');
     db.run(`
-      INSERT INTO users (id, name, email, password, phone, role) VALUES
-      (1, 'Priya Rao', 'patient@arogyavahini.in', 'password123', '+91 98765 43210', 'patient'),
-      (2, 'Mohammed Irfan', 'driver@arogyavahini.in', 'password123', '+91 97410 54321', 'driver'),
-      (3, 'Dr. Arvind Deshmukh', 'admin@arogyavahini.in', 'password123', '+91 98111 22334', 'admin'),
-      (4, 'Suresh Gowda', 'driver2@arogyavahini.in', 'password123', '+91 98860 67890', 'driver'),
-      (5, 'Ramesh Kumar', 'driver3@arogyavahini.in', 'password123', '+91 98450 12345', 'driver'),
-      (6, 'Anand Verma', 'driver4@arogyavahini.in', 'password123', '+91 99000 88776', 'driver');
+      INSERT INTO users (id, name, email, password, password_hash, phone, role) VALUES
+      (1, 'Priya Rao', 'patient@arogyavahini.in', 'password123', 'password123', '+91 98765 43210', 'patient'),
+      (2, 'Mohammed Irfan', 'driver@arogyavahini.in', 'password123', 'password123', '+91 97410 54321', 'driver'),
+      (3, 'Dr. Arvind Deshmukh', 'admin@arogyavahini.in', 'password123', 'password123', '+91 98111 22334', 'admin'),
+      (4, 'Suresh Gowda', 'driver2@arogyavahini.in', 'password123', 'password123', '+91 98860 67890', 'driver'),
+      (5, 'Ramesh Kumar', 'driver3@arogyavahini.in', 'password123', 'password123', '+91 98450 12345', 'driver'),
+      (6, 'Anand Verma', 'driver4@arogyavahini.in', 'password123', 'password123', '+91 99000 88776', 'driver');
     `);
   }
 

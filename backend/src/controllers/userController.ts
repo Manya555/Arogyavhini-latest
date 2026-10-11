@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { UserModel } from '../models/User.js';
+import { verifyPassword } from '../utils/security.js';
 
 export async function getUsers(req: Request, res: Response, next: NextFunction) {
   try {
@@ -13,12 +14,16 @@ export async function getUsers(req: Request, res: Response, next: NextFunction) 
 
 export async function getUserById(req: Request, res: Response, next: NextFunction) {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = req.params.id;
+    if (!id) {
+      return res.status(400).json({ success: false, error: { message: 'User ID is required' } });
+    }
     const user = await UserModel.findById(id);
     if (!user) {
       return res.status(404).json({ success: false, error: { message: 'User not found' } });
     }
-    res.json({ success: true, data: user });
+    const { password_hash: _, ...safeUser } = user as any;
+    res.json({ success: true, data: safeUser });
   } catch (err) {
     next(err);
   }
@@ -26,7 +31,7 @@ export async function getUserById(req: Request, res: Response, next: NextFunctio
 
 export async function registerUser(req: Request, res: Response, next: NextFunction) {
   try {
-    const { name, email, password, role, phone, blood_type, allergies, medical_notes } = req.body;
+    const { name, email, password, role, phone, client_id, auth_provider, blood_type, allergies, medical_notes } = req.body;
     if (!name || !email || !password || !role) {
       return res.status(400).json({
         success: false,
@@ -34,7 +39,8 @@ export async function registerUser(req: Request, res: Response, next: NextFuncti
       });
     }
 
-    const existing = await UserModel.findByEmail(email);
+    const cleanEmail = email.trim().toLowerCase();
+    const existing = await UserModel.findByEmail(cleanEmail);
     if (existing) {
       return res.status(409).json({
         success: false,
@@ -44,19 +50,22 @@ export async function registerUser(req: Request, res: Response, next: NextFuncti
 
     const newUser = await UserModel.create({
       name,
-      email,
+      email: cleanEmail,
       password,
       role,
       phone,
+      client_id,
+      auth_provider,
       blood_type,
       allergies,
       medical_notes,
     });
 
+    const { password_hash: _, ...safeUser } = newUser as any;
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
-      data: newUser,
+      data: safeUser,
     });
   } catch (err) {
     next(err);
@@ -73,15 +82,16 @@ export async function loginUser(req: Request, res: Response, next: NextFunction)
       });
     }
 
-    const user = await UserModel.findByEmail(email);
-    if (!user || user.password !== password) {
+    const cleanEmail = email.trim().toLowerCase();
+    const user = await UserModel.findByEmail(cleanEmail);
+    if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
       return res.status(401).json({
         success: false,
         error: { message: 'Invalid email or password' },
       });
     }
 
-    const { password: _, ...safeUser } = user;
+    const { password_hash: _, ...safeUser } = user as any;
     res.json({
       success: true,
       message: 'Login successful',
@@ -94,12 +104,16 @@ export async function loginUser(req: Request, res: Response, next: NextFunction)
 
 export async function updateUserProfile(req: Request, res: Response, next: NextFunction) {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = req.params.id;
+    if (!id) {
+      return res.status(400).json({ success: false, error: { message: 'User ID is required' } });
+    }
     const updated = await UserModel.update(id, req.body);
     if (!updated) {
       return res.status(404).json({ success: false, error: { message: 'User not found' } });
     }
-    res.json({ success: true, data: updated });
+    const { password_hash: _, ...safeUser } = updated as any;
+    res.json({ success: true, data: safeUser });
   } catch (err) {
     next(err);
   }

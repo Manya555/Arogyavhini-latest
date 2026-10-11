@@ -46,8 +46,8 @@ export const AdminFleetLiveMap: React.FC<AdminFleetLiveMapProps> = ({
 
   // Sync initial ambulances prop
   useEffect(() => {
-    if (initialAmbulances.length > 0) {
-      setAmbulances(initialAmbulances);
+    if (initialAmbulances && initialAmbulances.length > 0) {
+      setAmbulances((prev) => (prev.length === 0 ? initialAmbulances : prev));
     }
   }, [initialAmbulances]);
 

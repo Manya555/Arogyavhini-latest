@@ -1,5 +1,5 @@
 import { query } from '../config/db.js';
-import { hashPassword } from '../utils/security.js';
+import { hashPassword, generateUuid } from '../utils/security.js';
 
 export type UserRole = 'patient' | 'driver' | 'admin';
 
@@ -115,7 +115,29 @@ export class UserModel {
    */
   static async create(input: CreateUserInput): Promise<User> {
     const hashedPassword = hashPassword(input.password);
-    const clientId = input.client_id || null;
+    let clientId = input.client_id ? input.client_id.trim() : null;
+
+    if (!clientId) {
+      try {
+        const existingClientRes = await query<{ client_id: string }>(
+          `SELECT client_id FROM users 
+           WHERE client_id IS NOT NULL 
+           AND (delete_flag IS FALSE OR delete_flag IS NULL) 
+           ORDER BY created_at ASC 
+           LIMIT 1`
+        );
+        if (existingClientRes.rows && existingClientRes.rows.length > 0 && existingClientRes.rows[0].client_id) {
+          clientId = existingClientRes.rows[0].client_id;
+        }
+      } catch (err) {
+        console.warn('[User] Error querying existing client_id from users:', err);
+      }
+    }
+
+    if (!clientId) {
+      clientId = generateUuid();
+    }
+
     const res = await query<User>(
       `INSERT INTO users (
         name, email, password_hash, phone, role, auth_provider, delete_flag, client_id, created_at, updated_at

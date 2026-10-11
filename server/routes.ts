@@ -386,6 +386,34 @@ async function findDemoUser(role: string): Promise<any | null> {
   return user;
 }
 
+// Helper function to resolve a valid, non-null client_id for user creation
+// Reuses the appropriate existing client_id from an existing user in Neon PostgreSQL if available,
+// or uses the client_id passed in the request if valid, or generates a fresh UUID with generateUuid() (crypto.randomUUID())
+async function resolveClientId(pgPool: any, requestedClientId?: string | null): Promise<string> {
+  if (requestedClientId && typeof requestedClientId === 'string' && requestedClientId.trim().length > 0) {
+    return requestedClientId.trim();
+  }
+
+  // Check if an existing client_id already exists in the users table
+  try {
+    const existingClientRes = await pgPool.query(
+      `SELECT client_id FROM users 
+       WHERE client_id IS NOT NULL 
+       AND (delete_flag IS FALSE OR delete_flag IS NULL) 
+       ORDER BY created_at ASC 
+       LIMIT 1`
+    );
+    if (existingClientRes.rows && existingClientRes.rows.length > 0 && existingClientRes.rows[0].client_id) {
+      return existingClientRes.rows[0].client_id;
+    }
+  } catch (err) {
+    console.warn('[Auth] Error querying existing client_id from users:', err);
+  }
+
+  // Fallback to standalone UUID
+  return generateUuid();
+}
+
 // POST /api/auth/register & POST /api/users/register
 const handleRegister = async (req: Request, res: Response) => {
   try {
@@ -414,7 +442,7 @@ const handleRegister = async (req: Request, res: Response) => {
 
         const newId = generateUuid();
         const hashedPassword = hashPassword(password);
-        const clientId = req.body.client_id || null;
+        const clientId = await resolveClientId(pgPool, req.body.client_id);
 
         const insertRes = await pgPool.query(
           `INSERT INTO users (id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag, created_at, updated_at) 

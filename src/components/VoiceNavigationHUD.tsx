@@ -248,7 +248,9 @@ export const VoiceNavigationHUD: React.FC<VoiceNavigationHUDProps> = ({
     announcedMilestonesRef.current = {};
   }, [stage, route?.id]);
 
-  const steps = realSteps.length > 0 ? realSteps : generateRouteNavigationSteps(route, stage, destinationName);
+  const steps = useMemo(() => {
+    return realSteps.length > 0 ? realSteps : generateRouteNavigationSteps(route, stage, destinationName);
+  }, [realSteps, route, stage, destinationName]);
   const currentInstruction: NavigationInstruction = steps[currentStepIndex] || steps[0] || {
     id: 0,
     text: `Navigating to ${destinationName}`,

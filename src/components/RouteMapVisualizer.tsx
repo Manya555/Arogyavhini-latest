@@ -112,10 +112,14 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
   useEffect(() => {
     if (selectedHospital && hospitals.length > 0) {
       const found = hospitals.find((h) => h.name === selectedHospital);
-      if (found) setChosenHospitalObj(found);
-    } else if (hospitals.length > 0 && !chosenHospitalObj) {
-      const rec = hospitals.find((h) => h.isRecommended) || hospitals[0];
-      setChosenHospitalObj(rec);
+      if (found) {
+        setChosenHospitalObj((prev) => (prev?.id === found.id ? prev : found));
+      }
+    } else if (hospitals.length > 0) {
+      setChosenHospitalObj((prev) => {
+        if (prev) return prev;
+        return hospitals.find((h) => h.isRecommended) || hospitals[0] || null;
+      });
     }
   }, [selectedHospital, hospitals]);
 

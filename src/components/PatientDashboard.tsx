@@ -210,16 +210,25 @@ export const PatientDashboard: React.FC = () => {
 
   useEffect(() => {
     if (userCoords) {
-      setPatientCoords(userCoords);
-      setLocationPermissionStatus(
-        locationPermission === 'granted' ? 'granted' : locationPermission === 'denied' ? 'denied' : 'prompt'
-      );
+      setPatientCoords((prev) => {
+        if (
+          prev &&
+          prev.latitude === userCoords.latitude &&
+          prev.longitude === userCoords.longitude &&
+          prev.accuracy === userCoords.accuracy
+        ) {
+          return prev;
+        }
+        return userCoords;
+      });
+      const nextPerm = locationPermission === 'granted' ? 'granted' : locationPermission === 'denied' ? 'denied' : 'prompt';
+      setLocationPermissionStatus((prev) => (prev === nextPerm ? prev : nextPerm));
       if (lastGpsTimestamp) {
-        setLastPinnedTimestamp(lastGpsTimestamp);
+        setLastPinnedTimestamp((prev) => (prev === lastGpsTimestamp ? prev : lastGpsTimestamp));
       }
-      if (!location && contextAddress) {
-        setLocation(contextAddress);
-        setResolvedAddress(contextAddress);
+      if (contextAddress) {
+        setLocation((prev) => (prev ? prev : contextAddress));
+        setResolvedAddress((prev) => (prev ? prev : contextAddress));
       }
     }
   }, [userCoords, contextAddress, locationPermission, lastGpsTimestamp]);

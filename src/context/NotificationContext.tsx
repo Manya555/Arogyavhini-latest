@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { AppNotification } from '../types';
 import { api } from '../services/api';
 import { useAuth } from './AuthContext';
@@ -26,8 +26,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(false);
-  const [lastKnownIds, setLastKnownIds] = useState<Set<number | string>>(new Set());
   const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const lastKnownIdsRef = useRef<Set<number | string>>(new Set());
 
   const addNotification = useCallback((input: Partial<AppNotification> & { title: string; message: string }) => {
     const newNotification: AppNotification = {
@@ -48,7 +48,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
     soundEffects.playAlert();
     return newNotification;
-  }, [user]);
+  }, [user?.id, user?.role]);
 
   const notify = useCallback((title: string, message: string, type: string = 'SYSTEM_ALERT') => {
     return addNotification({
@@ -62,6 +62,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     if (!isAuthenticated || !user) {
       setNotifications([]);
       setUnreadCount(0);
+      lastKnownIdsRef.current = new Set();
       return;
     }
 
@@ -77,24 +78,25 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       });
 
       // Check if there are newly arrived notifications to trigger a subtle chime
-      const currentIds = new Set(data.notifications.map((n) => n.id));
-      if (lastKnownIds.size > 0) {
-        const hasNew = data.notifications.some(
-          (n) => !lastKnownIds.has(n.id) && !n.is_read
+      const fetched = data.notifications || [];
+      const currentIds = new Set(fetched.map((n) => n.id));
+      if (lastKnownIdsRef.current.size > 0) {
+        const hasNew = fetched.some(
+          (n) => !lastKnownIdsRef.current.has(n.id) && !n.is_read
         );
         if (hasNew) {
           soundEffects.playAlert();
         }
       }
-      setLastKnownIds(currentIds);
+      lastKnownIdsRef.current = currentIds;
 
-      setNotifications(data.notifications || []);
+      setNotifications(fetched);
       setUnreadCount(data.unreadCount || 0);
     } catch (err) {
       // Quietly ignore polling errors to prevent disruptive logs
       console.debug('Notification poll error:', err);
     }
-  }, [isAuthenticated, user, lastKnownIds]);
+  }, [isAuthenticated, user?.id, user?.role]);
 
   // Initial fetch and automatic polling interval
   useEffect(() => {
@@ -111,9 +113,9 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     } else {
       setNotifications([]);
       setUnreadCount(0);
-      setLastKnownIds(new Set());
+      lastKnownIdsRef.current = new Set();
     }
-  }, [isAuthenticated, user?.id, user?.role]);
+  }, [isAuthenticated, user?.id, user?.role, fetchNotifications]);
 
   const markAsRead = async (id: number | string) => {
     try {

@@ -38,7 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 -- ==============================================================================
 CREATE TABLE IF NOT EXISTS patients (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     national_health_id VARCHAR(50) UNIQUE,
     date_of_birth DATE,
     gender VARCHAR(20),

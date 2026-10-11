@@ -75,17 +75,27 @@ if (isPostgresEnabled) {
   console.log('ℹ️ [Database] PostgreSQL not configured in environment. Using embedded SQLite fallback.');
 }
 
-/**
- * Check if PostgreSQL is actively configured
- */
-export function isPostgresActive(): boolean {
-  return pool !== null;
+let isPostgresFailed = false;
+
+export function disablePostgresPool(reason?: any) {
+  if (!isPostgresFailed) {
+    isPostgresFailed = true;
+    console.warn('ℹ️ [Database] PostgreSQL unavailable or disconnected (' + (reason?.code || reason?.message || 'connection failed') + '). Automatically falling back to resilient local database.');
+  }
 }
 
 /**
- * Get direct access to the PostgreSQL connection pool
+ * Check if PostgreSQL is actively configured and reachable
+ */
+export function isPostgresActive(): boolean {
+  return pool !== null && !isPostgresFailed;
+}
+
+/**
+ * Get direct access to the PostgreSQL connection pool (returns null if disabled/unreachable)
  */
 export function getPostgresPool(): pg.Pool | null {
+  if (isPostgresFailed) return null;
   return pool;
 }
 
@@ -320,19 +330,17 @@ export async function initPostgresSchema(poolInstance: pg.Pool): Promise<void> {
  * SQLite is only initialized when PostgreSQL is not configured.
  */
 export async function ensureDatabaseReady(): Promise<void> {
-  if (pool) {
+  if (pool && !isPostgresFailed) {
     try {
       await initPostgresSchema(pool);
       return;
-    } catch (pgErr) {
-      console.error('❌ [Database] Neon PostgreSQL initialization error:', pgErr);
-      if (process.env.NODE_ENV === 'production') {
-        throw pgErr;
-      }
+    } catch (pgErr: any) {
+      console.warn('⚠️ [Database] Neon PostgreSQL initialization error (' + (pgErr?.code || pgErr?.message) + '). Falling back to embedded SQLite.');
+      disablePostgresPool(pgErr);
     }
   }
 
-  // Local development fallback: only initialize SQLite when PostgreSQL is not configured
+  // Local development / failover fallback: initialize SQLite
   const { getDb } = await loadSqlite();
   await getDb();
 }
@@ -343,13 +351,18 @@ export async function ensureDatabaseReady(): Promise<void> {
  * If local engine is active, runs against embedded SQLite.
  */
 export async function dbQuery(sql: string, params: any[] = []): Promise<any> {
-  if (pool) {
+  const activePool = getPostgresPool();
+  if (activePool) {
     try {
-      const res = await pool.query(sql, params);
+      const res = await activePool.query(sql, params);
       return res.rows;
-    } catch (err) {
-      console.error('[PostgreSQL Query Error]:', err);
-      throw err;
+    } catch (err: any) {
+      if (err?.code === 'ECONNREFUSED' || err?.code === 'ETIMEDOUT') {
+        disablePostgresPool(err);
+      } else {
+        console.error('[PostgreSQL Query Error]:', err);
+        throw err;
+      }
     }
   }
 

@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import { getDb, saveDb, resetDatabase } from './db.js';
-import { isPostgresActive, getPostgresPool } from './config/database.js';
+import { isPostgresActive, getPostgresPool, disablePostgresPool } from './config/database.js';
 import { hashPassword, verifyPassword, generateUuid } from './security.js';
 import {
   optimizeRoute,
@@ -1180,8 +1180,12 @@ apiRouter.get('/hospitals', async (req: Request, res: Response) => {
       try {
         const resPg = await pgPool.query('SELECT * FROM hospitals ORDER BY ward_capacity ASC, id ASC');
         return res.json({ hospitals: resPg.rows });
-      } catch (pgErr) {
-        console.warn('[Hospitals] PostgreSQL query fallback:', pgErr);
+      } catch (pgErr: any) {
+        if (pgErr?.code === 'ECONNREFUSED' || pgErr?.code === 'ETIMEDOUT') {
+          disablePostgresPool(pgErr);
+        } else {
+          console.warn('[Hospitals] PostgreSQL query fallback:', pgErr?.message || pgErr);
+        }
       }
     }
 
@@ -3215,8 +3219,12 @@ apiRouter.get('/ambulances', async (req: Request, res: Response) => {
           count: resPg.rows.length,
           ambulances: resPg.rows,
         });
-      } catch (pgErr) {
-        console.warn('[Ambulances] PostgreSQL query fallback:', pgErr);
+      } catch (pgErr: any) {
+        if (pgErr?.code === 'ECONNREFUSED' || pgErr?.code === 'ETIMEDOUT') {
+          disablePostgresPool(pgErr);
+        } else {
+          console.warn('[Ambulances] PostgreSQL query fallback:', pgErr?.message || pgErr);
+        }
       }
     }
 
@@ -3245,8 +3253,12 @@ apiRouter.get('/ambulances/available', async (req: Request, res: Response) => {
           count: resPg.rows.length,
           ambulances: resPg.rows,
         });
-      } catch (pgErr) {
-        console.warn('[Ambulances] PostgreSQL available query fallback:', pgErr);
+      } catch (pgErr: any) {
+        if (pgErr?.code === 'ECONNREFUSED' || pgErr?.code === 'ETIMEDOUT') {
+          disablePostgresPool(pgErr);
+        } else {
+          console.warn('[Ambulances] PostgreSQL available query fallback:', pgErr?.message || pgErr);
+        }
       }
     }
 
